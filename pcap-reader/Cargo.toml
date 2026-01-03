@@ -1,0 +1,20 @@
+[package]
+name = "pcap-reader"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+packet-strata = { path = "../packet-strata-lib" }
+
+# PCAP parsing
+pcap-parser.workspace = true
+
+# CLI and utilities
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Date/time
+chrono.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "packet-strata"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+smallvec.workspace = true
+smol_str.workspace = true
+thiserror.workspace = true
+zerocopy.workspace = true
