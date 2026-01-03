@@ -19,7 +19,7 @@ homepage = "https://github.com/awgn/packet-strata"
 documentation = "https://docs.rs/packet-strata"
 readme = "README.md"
 categories = ["network-programming", "parser-implementations"]
-keywords = ["ether", "sll", "ipv4", "ipv6", "udp", "tcp", "icmp", "tunnel", "networking"]
+keywords = ["packet", "parsing", "network", "pcap", "protocols"]
 
 [workspace.dependencies]
 smallvec = "1.13"
