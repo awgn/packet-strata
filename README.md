@@ -50,7 +50,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-packet-strata = { path = "path/to/packet-strata/packet-strata-lib" }
+packet-strata = "0.1" 
 ```
 
 **Note**: When adding `packet-strata` as a dependency, only the library will be built. The `pcap-reader` binary is excluded from default builds and won't be compiled unless explicitly requested with `cargo build --workspace` or `cargo build -p pcap-reader`.
