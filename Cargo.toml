@@ -14,6 +14,10 @@ edition = "2021"
 authors = ["Nicola Bonelli <nicola.bonelli@larthia.com>"]
 description = "A high-performance packet parsing library"
 license = "MIT"
+repository = "https://github.com/awgn/packet-strata"
+homepage = "https://github.com/awgn/packet-strata"
+documentation = "https://docs.rs/packet-strata"
+readme = "README.md"
 categories = ["network-programming", "parser-implementations"]
 keywords = ["ether", "sll", "ipv4", "ipv6", "udp", "tcp", "icmp", "tunnel", "networking"]
 
