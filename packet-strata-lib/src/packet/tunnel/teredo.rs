@@ -319,7 +319,7 @@ impl PacketHeader for TeredoAuthHeader {
 }
 
 /// Teredo Authentication with parsed fields
-#[derive (Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct TeredoAuthHeaderFull<'a> {
     /// Fixed header part
     pub header: &'a TeredoAuthHeader,
@@ -422,7 +422,7 @@ impl TeredoIndicator {
 ///
 /// Use this when you need to handle all Teredo variants including Authentication.
 /// For simple Origin Indication parsing, use `TeredoHeader::from_bytes()` directly.
-#[derive (Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct TeredoPacket<'a> {
     /// Authentication header (if present)
     authentication: Option<TeredoAuthHeaderFull<'a>>,

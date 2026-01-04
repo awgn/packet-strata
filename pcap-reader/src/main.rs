@@ -56,11 +56,7 @@ fn main() {
 }
 
 /// Process PCAP file packet by packet
-fn process_pcap(
-    pcap_path: &PathBuf,
-    args: &Args,
-    stats: &stats::Stats,
-) -> Result<(), String> {
+fn process_pcap(pcap_path: &PathBuf, args: &Args, stats: &stats::Stats) -> Result<(), String> {
     // Create thread-local stats for high-performance counting
     let mut local_stats = stats::LocalStats::new();
 

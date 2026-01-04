@@ -269,7 +269,7 @@ impl TcpHeader {
     }
 }
 
-#[derive (Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct TcpHeaderOpt<'a> {
     pub header: &'a TcpHeader,
     pub raw_options: &'a [u8],

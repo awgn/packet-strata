@@ -1,7 +1,7 @@
+use smallvec::SmallVec;
 use std::fmt;
 use std::mem;
 use thiserror::Error;
-use smallvec::SmallVec;
 use zerocopy::{FromBytes, Immutable, KnownLayout, Ref, Unaligned};
 
 use crate::packet::{
@@ -11,7 +11,7 @@ use crate::packet::{
         find_ipv6_upper_protocol, is_stt_port, NextLayer, TunnelType,
     },
     ether::EtherHeader,
-    header::{NetworkTunnelLayer, LinkLayer, NetworkLayer, TransportLayer, TunnelLayer},
+    header::{LinkLayer, NetworkLayer, NetworkTunnelLayer, TransportLayer, TunnelLayer},
     icmp::IcmpHeader,
     icmp6::Icmp6Header,
     ipv4::Ipv4Header,
@@ -44,13 +44,13 @@ pub mod arp;
 pub mod detect;
 pub mod dhcp;
 pub mod ether;
+pub mod header;
 pub mod icmp;
 pub mod icmp6;
 pub mod ipv4;
 pub mod ipv6;
 pub mod iter;
 pub mod null;
-pub mod header;
 pub mod protocol;
 pub mod sctp;
 pub mod sll;
@@ -194,7 +194,11 @@ impl<'a> Packet<'a> {
     /// * `link_type` - The link layer type of the packet
     /// * `mode` - Parse mode: `Outermost` ignores tunnels, `Innermost` parses through them
     #[inline]
-    pub fn from_bytes(buf: &'a [u8], link_type: LinkType, mode: ParseMode) -> Result<Self, PacketHeaderError> {
+    pub fn from_bytes(
+        buf: &'a [u8],
+        link_type: LinkType,
+        mode: ParseMode,
+    ) -> Result<Self, PacketHeaderError> {
         let mut remaining = buf;
         let mut next_layer = NextLayer::Link(link_type);
 
@@ -349,7 +353,11 @@ impl<'a> Packet<'a> {
             LinkType::Ethernet => {
                 let (eth, rest) = EtherHeader::from_bytes(buf)?;
                 let next_proto = eth.inner_type();
-                Ok((LinkLayer::Ethernet(eth), NextLayer::Network(next_proto), rest))
+                Ok((
+                    LinkLayer::Ethernet(eth),
+                    NextLayer::Network(next_proto),
+                    rest,
+                ))
             }
             LinkType::Sll => {
                 let (sll, rest) = SllHeader::from_bytes(buf)?;
@@ -371,11 +379,13 @@ impl<'a> Packet<'a> {
                 // Actually we need to handle this differently - parse network directly
                 // For RawIpv4/RawIpv6, we don't have a link layer header
                 // We'll create a special case
-                Err(PacketHeaderError::Other("RawIpv4 requires special handling"))
+                Err(PacketHeaderError::Other(
+                    "RawIpv4 requires special handling",
+                ))
             }
-            LinkType::RawIpv6 => {
-                Err(PacketHeaderError::Other("RawIpv6 requires special handling"))
-            }
+            LinkType::RawIpv6 => Err(PacketHeaderError::Other(
+                "RawIpv6 requires special handling",
+            )),
         }
     }
 
@@ -446,8 +456,7 @@ impl<'a> Packet<'a> {
                 // Parse MPLS directly here since it goes into NetworkLayer
                 match MplsLabelStack::parse(buf) {
                     Some((mpls_stack, payload)) => {
-                        let next = detect_mpls_inner_protocol(payload)
-                            .unwrap_or(NextLayer::Done);
+                        let next = detect_mpls_inner_protocol(payload).unwrap_or(NextLayer::Done);
                         Ok(NetworkResult::Mpls(mpls_stack, next, payload))
                     }
                     None => Err(PacketHeaderError::TooShort("MPLS")),
@@ -455,11 +464,17 @@ impl<'a> Packet<'a> {
             }
             EtherProto::TEB => {
                 // Transparent Ethernet Bridging - inner Ethernet frame
-                Ok(NetworkResult::Tunnel(NextLayer::Link(LinkType::Ethernet), buf))
+                Ok(NetworkResult::Tunnel(
+                    NextLayer::Link(LinkType::Ethernet),
+                    buf,
+                ))
             }
             EtherProto::VLAN_8021AH | EtherProto::VLAN_8021AD => {
                 // PBB (Provider Backbone Bridge / MAC-in-MAC)
-                Ok(NetworkResult::Tunnel(NextLayer::Tunnel(TunnelType::Pbb), buf))
+                Ok(NetworkResult::Tunnel(
+                    NextLayer::Tunnel(TunnelType::Pbb),
+                    buf,
+                ))
             }
             _ => {
                 // Unknown network protocol - stop parsing
@@ -566,7 +581,10 @@ impl<'a> Packet<'a> {
                     return Ok(TransportResult::Done(buf));
                 }
                 // L2TPv3 over IP (protocol 115)
-                Ok(TransportResult::Tunnel(NextLayer::Tunnel(TunnelType::L2tpv3), buf))
+                Ok(TransportResult::Tunnel(
+                    NextLayer::Tunnel(TunnelType::L2tpv3),
+                    buf,
+                ))
             }
             IpProto::IPV6_NONXT => {
                 // No next header - we're done
@@ -588,12 +606,20 @@ impl<'a> Packet<'a> {
         match tunnel_type {
             TunnelType::Vxlan => {
                 let (vxlan, rest) = VxlanHeader::from_bytes(buf)?;
-                Ok((TunnelLayer::Vxlan(vxlan), NextLayer::Link(LinkType::Ethernet), rest))
+                Ok((
+                    TunnelLayer::Vxlan(vxlan),
+                    NextLayer::Link(LinkType::Ethernet),
+                    rest,
+                ))
             }
             TunnelType::Geneve => {
                 let (geneve, rest) = GeneveHeader::from_bytes(buf)?;
                 let inner_proto = geneve.protocol_type();
-                Ok((TunnelLayer::Geneve(geneve), NextLayer::Network(inner_proto), rest))
+                Ok((
+                    TunnelLayer::Geneve(geneve),
+                    NextLayer::Network(inner_proto),
+                    rest,
+                ))
             }
             TunnelType::Gre => {
                 let (gre, rest) = GreHeader::from_bytes(buf)?;
@@ -608,12 +634,18 @@ impl<'a> Packet<'a> {
             TunnelType::Mpls => {
                 // MPLS is handled in parse_network via NetworkResult::Mpls
                 // This should not be reached, but handle it gracefully
-                Err(PacketHeaderError::Other("MPLS should be handled in network layer"))
+                Err(PacketHeaderError::Other(
+                    "MPLS should be handled in network layer",
+                ))
             }
             TunnelType::Teredo => {
                 let teredo = TeredoPacket::parse(buf)?;
                 let payload = teredo.ipv6_payload();
-                Ok((TunnelLayer::Teredo(Box::new(teredo)), NextLayer::Network(EtherProto::IPV6), payload))
+                Ok((
+                    TunnelLayer::Teredo(Box::new(teredo)),
+                    NextLayer::Network(EtherProto::IPV6),
+                    payload,
+                ))
             }
             TunnelType::Gtpv1 => {
                 let (gtpv1, rest) = Gtpv1Header::from_bytes(buf)?;
@@ -653,21 +685,31 @@ impl<'a> Packet<'a> {
             }
             TunnelType::Nvgre => {
                 let (nvgre, rest) = NvgreHeader::from_bytes(buf)?;
-                Ok((TunnelLayer::Nvgre(nvgre), NextLayer::Link(LinkType::Ethernet), rest))
+                Ok((
+                    TunnelLayer::Nvgre(nvgre),
+                    NextLayer::Link(LinkType::Ethernet),
+                    rest,
+                ))
             }
             TunnelType::Pbb => {
                 let (pbb, rest) = PbbHeader::parse(buf)?;
-                Ok((TunnelLayer::Pbb(pbb), NextLayer::Link(LinkType::Ethernet), rest))
+                Ok((
+                    TunnelLayer::Pbb(pbb),
+                    NextLayer::Link(LinkType::Ethernet),
+                    rest,
+                ))
             }
-            TunnelType::Stt => {
-                match SttPacket::parse(buf) {
-                    Some(stt) => {
-                        let payload = stt.payload;
-                        Ok((TunnelLayer::Stt(stt), NextLayer::Link(LinkType::Ethernet), payload))
-                    }
-                    None => Err(PacketHeaderError::TooShort("STT")),
+            TunnelType::Stt => match SttPacket::parse(buf) {
+                Some(stt) => {
+                    let payload = stt.payload;
+                    Ok((
+                        TunnelLayer::Stt(stt),
+                        NextLayer::Link(LinkType::Ethernet),
+                        payload,
+                    ))
                 }
-            }
+                None => Err(PacketHeaderError::TooShort("STT")),
+            },
             TunnelType::Pptp => {
                 let (pptp, rest) = PptpGreHeader::from_bytes(buf)?;
                 Ok((TunnelLayer::Pptp(pptp), NextLayer::Done, rest))
@@ -811,16 +853,29 @@ mod tests {
             .expect("Should parse VXLAN packet");
 
         // Should have exactly one tunnel (VXLAN)
-        assert_eq!(packet.tunnels().len(), 1, "Expected 1 tunnel, got {}", packet.tunnels().len());
+        assert_eq!(
+            packet.tunnels().len(),
+            1,
+            "Expected 1 tunnel, got {}",
+            packet.tunnels().len()
+        );
 
         // The tunnel should be VXLAN
-        assert!(matches!(packet.tunnels()[0].tunnel(), TunnelLayer::Vxlan(_)),
-            "Expected VXLAN tunnel, got {:?}", packet.tunnels()[0].tunnel());
+        assert!(
+            matches!(packet.tunnels()[0].tunnel(), TunnelLayer::Vxlan(_)),
+            "Expected VXLAN tunnel, got {:?}",
+            packet.tunnels()[0].tunnel()
+        );
 
         // The outer IP should be present
-        assert!(packet.tunnels()[0].outer().is_some(), "Expected outer IP header");
-        assert!(matches!(packet.tunnels()[0].outer().unwrap(), NetworkLayer::Ipv4(_)),
-            "Expected outer IPv4");
+        assert!(
+            packet.tunnels()[0].outer().is_some(),
+            "Expected outer IP header"
+        );
+        assert!(
+            matches!(packet.tunnels()[0].outer().unwrap(), NetworkLayer::Ipv4(_)),
+            "Expected outer IPv4"
+        );
 
         // Network should be the inner IPv4
         assert!(packet.network().is_some(), "Expected network layer");
@@ -834,7 +889,11 @@ mod tests {
             .expect("Should parse VXLAN packet");
 
         // Outermost mode should NOT parse tunnels
-        assert_eq!(packet.tunnels().len(), 0, "Outermost mode should have 0 tunnels");
+        assert_eq!(
+            packet.tunnels().len(),
+            0,
+            "Outermost mode should have 0 tunnels"
+        );
 
         // Network should be the outer IPv4
         assert!(packet.network().is_some(), "Expected network layer");
@@ -851,7 +910,10 @@ mod tests {
         let ip_tunnel = &packet.tunnels()[0];
 
         // Check outer IP header exists and is IPv4
-        assert!(ip_tunnel.outer().is_some(), "Outer IP should be present for VXLAN");
+        assert!(
+            ip_tunnel.outer().is_some(),
+            "Outer IP should be present for VXLAN"
+        );
         match ip_tunnel.outer().unwrap() {
             NetworkLayer::Ipv4(ipv4) => {
                 // Verify outer IPs match what we created
@@ -872,6 +934,9 @@ mod tests {
         // Verify Display format includes both outer and tunnel
         let display = format!("{}", ip_tunnel);
         assert!(display.contains("IPv4"), "Display should show outer IPv4");
-        assert!(display.contains("VXLAN"), "Display should show VXLAN tunnel");
+        assert!(
+            display.contains("VXLAN"),
+            "Display should show VXLAN tunnel"
+        );
     }
 }

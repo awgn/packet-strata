@@ -207,7 +207,7 @@ impl Ipv4Header {
 }
 
 /// IPv4 Header with options
-#[derive (Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Ipv4HeaderOpt<'a> {
     pub header: &'a Ipv4Header,
     pub raw_options: &'a [u8],

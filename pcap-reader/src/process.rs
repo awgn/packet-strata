@@ -1,7 +1,7 @@
-use packet_strata::packet::iter::{Header, LinkType, PacketIter};
-use packet_strata::packet::{Packet, ParseMode};
 use packet_strata::packet::header::{LinkLayer, NetworkLayer, TransportLayer, TunnelLayer};
+use packet_strata::packet::iter::{Header, LinkType, PacketIter};
 use packet_strata::packet::tunnel::ipip::IpipType;
+use packet_strata::packet::{Packet, ParseMode};
 
 use crate::packet_metadata::PacketMetadata;
 use crate::stats::{LocalStats, Stats, FLUSH_INTERVAL};
@@ -18,29 +18,14 @@ pub fn process_packet<'a, Pkt: PacketMetadata>(
     local_stats: &mut LocalStats,
     stats: &Stats,
     dump_packet: bool,
-    full_packet: bool)
-{
+    full_packet: bool,
+) {
     if full_packet {
-        process_full_packet(
-            _pkt_count,
-            link_type,
-            pkt,
-            local_stats,
-            stats,
-            dump_packet,
-        );
+        process_full_packet(_pkt_count, link_type, pkt, local_stats, stats, dump_packet);
     } else {
-        process_iterate_headers(
-            _pkt_count,
-            link_type,
-            pkt,
-            local_stats,
-            stats,
-            dump_packet,
-        );
+        process_iterate_headers(_pkt_count, link_type, pkt, local_stats, stats, dump_packet);
     }
 }
-
 
 pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
     _pkt_count: u64,
@@ -60,7 +45,12 @@ pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
     let iter = PacketIter::new(pkt.data(), link_type.unwrap());
 
     if dump_packet {
-        println!("{:>5}   {} ({} bytes)", local_stats.total_packets, pkt.timestamp_string(), pkt.data().len());
+        println!(
+            "{:>5}   {} ({} bytes)",
+            local_stats.total_packets,
+            pkt.timestamp_string(),
+            pkt.data().len()
+        );
     }
 
     for result in iter {
@@ -142,7 +132,6 @@ pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
     }
 }
 
-
 pub fn process_full_packet<'a, Pkt: PacketMetadata>(
     _pkt_count: u64,
     link_type: &mut Option<LinkType>,
@@ -161,7 +150,12 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
     match Packet::from_bytes(pkt.data(), link_type.unwrap(), ParseMode::Innermost) {
         Ok(packet) => {
             if dump_packet {
-                println!("{:>5}   {} ({} bytes)", local_stats.total_packets, pkt.timestamp_string(), pkt.data().len());
+                println!(
+                    "{:>5}   {} ({} bytes)",
+                    local_stats.total_packets,
+                    pkt.timestamp_string(),
+                    pkt.data().len()
+                );
                 print!("{}", packet);
             }
 
@@ -213,14 +207,12 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
                     TunnelLayer::Pbb(_) => local_stats.pbb += 1,
                     TunnelLayer::Stt(_) => local_stats.stt += 1,
                     TunnelLayer::Pptp(_) => local_stats.pptp += 1,
-                    TunnelLayer::Ipip(tunnel) => {
-                        match tunnel.tunnel_type() {
-                            IpipType::Ipip => local_stats.ipip += 1,
-                            IpipType::Sit => local_stats.sit += 1,
-                            IpipType::Ip4in6 => local_stats.ip4in6 += 1,
-                            IpipType::Ip6Tnl => local_stats.ip6tnl += 1,
-                        }
-                    }
+                    TunnelLayer::Ipip(tunnel) => match tunnel.tunnel_type() {
+                        IpipType::Ipip => local_stats.ipip += 1,
+                        IpipType::Sit => local_stats.sit += 1,
+                        IpipType::Ip4in6 => local_stats.ip4in6 += 1,
+                        IpipType::Ip6Tnl => local_stats.ip6tnl += 1,
+                    },
                 }
             }
         }

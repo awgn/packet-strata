@@ -109,8 +109,8 @@
 
 use super::arp::ArpHeader;
 use super::detect::{
-    detect_gre_variant, detect_mpls_inner_protocol, detect_udp_tunnel,
-    find_ipv6_upper_protocol, is_stt_port, NextLayer, TunnelType,
+    detect_gre_variant, detect_mpls_inner_protocol, detect_udp_tunnel, find_ipv6_upper_protocol,
+    is_stt_port, NextLayer, TunnelType,
 };
 use super::ether::EtherHeader;
 // Re-export Header and UnknownProto for API compatibility
@@ -158,7 +158,6 @@ pub enum LinkType {
     /// Raw IPv6 (no link layer header)
     RawIpv6,
 }
-
 
 /// Iterator over packet headers
 ///
@@ -837,7 +836,6 @@ impl<'a> PacketIter<'a> {
                     Some(Err(e))
                 }
             },
-
         }
     }
 }
@@ -945,22 +943,33 @@ mod tests {
         println!("NextLayer: {} bytes", size_of::<NextLayer>());
         println!("TunnelType: {} bytes", size_of::<TunnelType>());
         println!("Header: {} bytes", size_of::<Header>());
-        println!("Option<Result<Header, PacketHeaderError>>: {} bytes",
-                 size_of::<Option<Result<Header, crate::packet::PacketHeaderError>>>());
+        println!(
+            "Option<Result<Header, PacketHeaderError>>: {} bytes",
+            size_of::<Option<Result<Header, crate::packet::PacketHeaderError>>>()
+        );
         println!("&[u8]: {} bytes", size_of::<&[u8]>());
         println!("EtherProto: {} bytes", size_of::<EtherProto>());
         println!("IpProto: {} bytes", size_of::<IpProto>());
 
         println!("\n=== Potential Optimization ===");
-        println!("Box<TeredoPacket>: {} bytes", size_of::<Box<TeredoPacket>>());
+        println!(
+            "Box<TeredoPacket>: {} bytes",
+            size_of::<Box<TeredoPacket>>()
+        );
         println!("Box<IpipTunnel>: {} bytes", size_of::<Box<IpipTunnel>>());
         println!("If we Box Teredo, Header would be ~40 bytes (IpipTunnel is largest)");
         println!("If we Box both Teredo and IpipTunnel, Header would be ~32 bytes (MplsLabelStack/EtherHeaderVlan)");
 
         println!("\n=== Header Variant Inner Types (sorted by size) ===");
         println!("\n=== Header Variant Inner Types (sorted by size) ===");
-        println!("TeredoPacket: {} bytes  <-- LARGEST, causes Header to be 104 bytes!", size_of::<TeredoPacket>());
-        println!("IpipTunnel: {} bytes  <-- second largest", size_of::<IpipTunnel>());
+        println!(
+            "TeredoPacket: {} bytes  <-- LARGEST, causes Header to be 104 bytes!",
+            size_of::<TeredoPacket>()
+        );
+        println!(
+            "IpipTunnel: {} bytes  <-- second largest",
+            size_of::<IpipTunnel>()
+        );
         println!("SttPacket: {} bytes", size_of::<SttPacket>());
         println!("MplsLabelStack: {} bytes", size_of::<MplsLabelStack>());
         println!("EtherHeaderVlan: {} bytes", size_of::<EtherHeaderVlan>());
@@ -973,14 +982,23 @@ mod tests {
         println!("Gtpv1HeaderOpt: {} bytes", size_of::<Gtpv1HeaderOpt>());
         println!("Gtpv2HeaderOpt: {} bytes", size_of::<Gtpv2HeaderOpt>());
         println!("L2tpv2HeaderOpt: {} bytes", size_of::<L2tpv2HeaderOpt>());
-        println!("L2tpv3SessionHeaderCookie: {} bytes", size_of::<L2tpv3SessionHeaderCookie>());
+        println!(
+            "L2tpv3SessionHeaderCookie: {} bytes",
+            size_of::<L2tpv3SessionHeaderCookie>()
+        );
         println!("PptpGreHeaderOpt: {} bytes", size_of::<PptpGreHeaderOpt>());
         println!("PbbHeader: {} bytes", size_of::<PbbHeader>());
 
         println!("\n=== Summary ===");
-        println!("Current Header size: {} bytes (dominated by TeredoPacket)", size_of::<Header>());
+        println!(
+            "Current Header size: {} bytes (dominated by TeredoPacket)",
+            size_of::<Header>()
+        );
         println!("Most common headers (Ethernet+IPv4+TCP) are only 24-32 bytes each");
-        println!("Every iteration copies {} bytes even for simple TCP packets!", size_of::<Header>());
+        println!(
+            "Every iteration copies {} bytes even for simple TCP packets!",
+            size_of::<Header>()
+        );
         println!("========================\n");
     }
 
@@ -1849,9 +1867,16 @@ mod tests {
 
         // IPIP tunnel (wraps outer IPv4)
         let header = iter.next().unwrap().unwrap();
-        assert!(matches!(header, Header::Ipip(_)), "Expected Ipip, got {:?}", header);
+        assert!(
+            matches!(header, Header::Ipip(_)),
+            "Expected Ipip, got {:?}",
+            header
+        );
         if let Header::Ipip(tunnel) = &header {
-            assert_eq!(tunnel.tunnel_type(), super::super::tunnel::ipip::IpipType::Ipip);
+            assert_eq!(
+                tunnel.tunnel_type(),
+                super::super::tunnel::ipip::IpipType::Ipip
+            );
             assert!(tunnel.outer_ipv4().is_some());
         }
 
@@ -2442,20 +2467,14 @@ mod tests {
     fn test_gre_over_ethernet_ospf_packet() {
         // Real captured packet: Ethernet + IPv4 + GRE + inner IPv4 (OSPF)
         let packet: Vec<u8> = vec![
-            0xcc, 0x01, 0x0f, 0x80, 0x00, 0x00, 0xcc, 0x00,
-            0x0f, 0x80, 0x00, 0x00, 0x08, 0x00, 0x45, 0xc0,
-            0x00, 0x64, 0x00, 0x0f, 0x00, 0x00, 0xff, 0x2f,
-            0x16, 0x47, 0xc0, 0xa8, 0x0c, 0x01, 0xc0, 0xa8,
-            0x17, 0x03, 0x00, 0x00, 0x08, 0x00, 0x45, 0xc0,
-            0x00, 0x4c, 0x00, 0x27, 0x00, 0x00, 0x01, 0x59,
-            0x0a, 0xc4, 0xc0, 0xa8, 0x0d, 0x01, 0xe0, 0x00,
-            0x00, 0x05, 0x02, 0x01, 0x00, 0x2c, 0x01, 0x01,
-            0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0xea, 0x9c,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0xff, 0xff, 0xff, 0x00, 0x00, 0x0a,
-            0x12, 0x01, 0x00, 0x00, 0x00, 0x28, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xf6,
-            0x00, 0x03, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00,
+            0xcc, 0x01, 0x0f, 0x80, 0x00, 0x00, 0xcc, 0x00, 0x0f, 0x80, 0x00, 0x00, 0x08, 0x00,
+            0x45, 0xc0, 0x00, 0x64, 0x00, 0x0f, 0x00, 0x00, 0xff, 0x2f, 0x16, 0x47, 0xc0, 0xa8,
+            0x0c, 0x01, 0xc0, 0xa8, 0x17, 0x03, 0x00, 0x00, 0x08, 0x00, 0x45, 0xc0, 0x00, 0x4c,
+            0x00, 0x27, 0x00, 0x00, 0x01, 0x59, 0x0a, 0xc4, 0xc0, 0xa8, 0x0d, 0x01, 0xe0, 0x00,
+            0x00, 0x05, 0x02, 0x01, 0x00, 0x2c, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+            0xea, 0x9c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff,
+            0xff, 0x00, 0x00, 0x0a, 0x12, 0x01, 0x00, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0xff, 0xf6, 0x00, 0x03, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00,
             0x00, 0x01,
         ];
 
@@ -2488,7 +2507,11 @@ mod tests {
 
         // Fifth: Unknown (OSPF is not parsed, should be Unknown)
         let h5 = iter.next().unwrap().unwrap();
-        assert!(matches!(h5, Header::Unknown { .. }), "Expected Unknown for OSPF, got {:?}", h5);
+        assert!(
+            matches!(h5, Header::Unknown { .. }),
+            "Expected Unknown for OSPF, got {:?}",
+            h5
+        );
     }
 
     #[test]
@@ -2496,25 +2519,24 @@ mod tests {
         // Real captured packet: Ethernet + IPv6 + IPv4 + TCP (IPv4-in-IPv6 tunnel)
         // IPv6 next header = 4 (IPIP = IPv4 encapsulated in IPv6)
         let packet: Vec<u8> = vec![
-            0x00, 0x90, 0x1a, 0x41, 0x65, 0x41, 0x00, 0x16,
-            0xcf, 0x41, 0x9c, 0x20, 0x86, 0xdd, 0x60, 0x00,
-            0x00, 0x00, 0x00, 0x28, 0x04, 0x40, 0x20, 0x02,
-            0x46, 0x37, 0xd5, 0xd3, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x46, 0x37, 0xd5, 0xd3, 0x20, 0x01,
-            0x48, 0x60, 0x00, 0x00, 0x20, 0x01, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x68, 0x45, 0x00,
-            0x00, 0x28, 0x00, 0x01, 0x00, 0x00, 0x40, 0x06,
-            0x3b, 0x6b, 0x46, 0x37, 0xd5, 0xd3, 0xc0, 0x58,
-            0x63, 0x01, 0x7a, 0x69, 0x00, 0x50, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0x02,
-            0x20, 0x00, 0xd5, 0xc4, 0x00, 0x00,
+            0x00, 0x90, 0x1a, 0x41, 0x65, 0x41, 0x00, 0x16, 0xcf, 0x41, 0x9c, 0x20, 0x86, 0xdd,
+            0x60, 0x00, 0x00, 0x00, 0x00, 0x28, 0x04, 0x40, 0x20, 0x02, 0x46, 0x37, 0xd5, 0xd3,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46, 0x37, 0xd5, 0xd3, 0x20, 0x01, 0x48, 0x60,
+            0x00, 0x00, 0x20, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x68, 0x45, 0x00,
+            0x00, 0x28, 0x00, 0x01, 0x00, 0x00, 0x40, 0x06, 0x3b, 0x6b, 0x46, 0x37, 0xd5, 0xd3,
+            0xc0, 0x58, 0x63, 0x01, 0x7a, 0x69, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x50, 0x02, 0x20, 0x00, 0xd5, 0xc4, 0x00, 0x00,
         ];
 
         let mut iter = PacketIter::new(&packet, LinkType::Ethernet);
 
         // First: Ethernet (EtherType 0x86dd = IPv6)
         let h1 = iter.next().unwrap().unwrap();
-        assert!(matches!(h1, Header::Ethernet(_)), "Expected Ethernet, got {:?}", h1);
+        assert!(
+            matches!(h1, Header::Ethernet(_)),
+            "Expected Ethernet, got {:?}",
+            h1
+        );
         if let Header::Ethernet(eth) = h1 {
             assert_eq!(eth.proto(), EtherProto::IPV6);
         }
@@ -2523,8 +2545,12 @@ mod tests {
         let h2 = iter.next().unwrap().unwrap();
         assert!(matches!(h2, Header::Ipip(_)), "Expected Ipip, got {:?}", h2);
         if let Header::Ipip(tunnel) = &h2 {
-            assert_eq!(tunnel.tunnel_type(), super::super::tunnel::ipip::IpipType::Ip4in6,
-                "Expected Ip4in6 tunnel type, got {:?}", tunnel.tunnel_type());
+            assert_eq!(
+                tunnel.tunnel_type(),
+                super::super::tunnel::ipip::IpipType::Ip4in6,
+                "Expected Ip4in6 tunnel type, got {:?}",
+                tunnel.tunnel_type()
+            );
             assert!(tunnel.outer_ipv6().is_some());
             let outer = tunnel.outer_ipv6().unwrap();
             assert_eq!(outer.next_header(), IpProto::from(4u8));

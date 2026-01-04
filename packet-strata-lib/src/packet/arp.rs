@@ -297,7 +297,7 @@ impl HeaderParser for ArpHeader {
 ///
 /// This is the proxy object returned by the parser. It provides access to both
 /// the fixed header and the variable-length address fields.
-#[derive (Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct ArpHeaderFull<'a> {
     pub header: &'a ArpHeader,
     pub addresses: &'a [u8],

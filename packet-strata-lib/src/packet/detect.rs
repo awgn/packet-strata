@@ -66,7 +66,11 @@ pub(crate) enum TunnelType {
 /// Checks destination port first (most common case), then source port
 /// for bidirectional protocols like Teredo and L2TP.
 #[inline]
-pub(crate) fn detect_udp_tunnel(src_port: u16, dst_port: u16, payload: &[u8]) -> Option<TunnelType> {
+pub(crate) fn detect_udp_tunnel(
+    src_port: u16,
+    dst_port: u16,
+    payload: &[u8],
+) -> Option<TunnelType> {
     // Check destination port first (most common case)
     match dst_port {
         VXLAN_PORT => return Some(TunnelType::Vxlan),

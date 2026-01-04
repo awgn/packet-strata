@@ -247,7 +247,7 @@ impl GeneveHeader {
 }
 
 /// Geneve Header with options parsed
-#[derive (Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct GeneveHeaderOpt<'a> {
     pub header: &'a GeneveHeader,
     pub options: &'a [u8],

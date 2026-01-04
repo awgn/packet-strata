@@ -3,8 +3,6 @@
 //! This module provides the [`Header`] enum which wraps all supported protocol headers
 //! and [`UnknownProto`] for representing unknown/unsupported protocols.
 
-
-
 use super::arp::ArpHeaderFull;
 use super::ether::EtherHeaderVlan;
 use super::icmp::IcmpHeader;
@@ -303,7 +301,7 @@ impl std::fmt::Display for Header<'_> {
     }
 }
 
-#[derive (Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum LinkLayer<'a> {
     Ethernet(EtherHeaderVlan<'a>),
     Sll(&'a SllHeader),
@@ -322,7 +320,7 @@ impl std::fmt::Display for LinkLayer<'_> {
     }
 }
 
-#[derive (Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum NetworkLayer<'a> {
     Ipv4(Ipv4HeaderOpt<'a>),
     Ipv6(Ipv6HeaderExt<'a>),
@@ -339,7 +337,7 @@ impl std::fmt::Display for NetworkLayer<'_> {
     }
 }
 
-#[derive (Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum TransportLayer<'a> {
     Tcp(TcpHeaderOpt<'a>),
     Udp(&'a UdpHeader),
@@ -360,7 +358,7 @@ impl std::fmt::Display for TransportLayer<'_> {
     }
 }
 
-#[derive (Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum TunnelLayer<'a> {
     Vxlan(&'a VxlanHeader),
     Geneve(GeneveHeaderOpt<'a>),

@@ -276,7 +276,7 @@ impl GreHeader {
 }
 
 /// GRE Header with optional fields parsed
-#[derive (Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct GreHeaderOpt<'a> {
     pub header: &'a GreHeader,
     pub raw_options: &'a [u8],

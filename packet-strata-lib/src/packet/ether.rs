@@ -286,7 +286,6 @@ pub enum EtherHeaderVlan<'a> {
     VLAN8021QNested(&'a EtherHeader, &'a Ether8021qHeader, &'a Ether8021qHeader),
 }
 
-
 impl Display for EtherHeaderVlan<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {

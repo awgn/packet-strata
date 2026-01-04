@@ -40,8 +40,8 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crate::packet::ether::EtherHeaderVlan;
-use crate::packet::header::{NetworkTunnelLayer, LinkLayer, NetworkLayer, TunnelLayer};
-use crate::packet::tunnel::ipip::OuterIpHeader;
+use crate::packet::header::{LinkLayer, NetworkLayer, NetworkTunnelLayer, TunnelLayer};
+use crate::packet::Packet;
 
 /// Error types for VNI operations
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,262 +305,197 @@ impl fmt::Display for VniLayer {
     }
 }
 
-impl From<LinkLayer<'_>> for SmallVec<[VniLayer; 2]> {
-    fn from(value: LinkLayer<'_>) -> Self {
+impl From<&LinkLayer<'_>> for SmallVec<[VniLayer; 2]> {
+    fn from(value: &LinkLayer<'_>) -> Self {
         match value {
             LinkLayer::Ethernet(EtherHeaderVlan::VLAN8021Q(_, eth8021q)) => {
                 let mut sv = SmallVec::<[VniLayer; 2]>::new();
-                sv.push(VniLayer::Vlan { vid: eth8021q.vlan_id() });
+                sv.push(VniLayer::Vlan {
+                    vid: eth8021q.vlan_id(),
+                });
                 sv
-            },
+            }
             LinkLayer::Ethernet(EtherHeaderVlan::VLAN8021QNested(_, eth8021q, eth8021q_n)) => {
                 let mut sv = SmallVec::<[VniLayer; 2]>::new();
-                sv.push(VniLayer::Vlan { vid: eth8021q.vlan_id() });
-                sv.push(VniLayer::Vlan { vid: eth8021q_n.vlan_id() });
+                sv.push(VniLayer::Vlan {
+                    vid: eth8021q.vlan_id(),
+                });
+                sv.push(VniLayer::Vlan {
+                    vid: eth8021q_n.vlan_id(),
+                });
                 sv
-            },
+            }
             _ => SmallVec::<[VniLayer; 2]>::new(),
         }
     }
 }
 
-pub struct IpTunnel<'a>((OuterIpHeader<'a>, TunnelLayer<'a>));
-
-impl From<IpTunnel<'_>> for SmallVec<[VniLayer; 2]> {
-    fn from(IpTunnel((ip, tun)): IpTunnel<'_>) -> Self {
-        let mut sv = SmallVec::<[VniLayer; 2]>::new();
-
-        let endpoints : [IpAddr; 2] = match ip {
-            OuterIpHeader::V4(ipv4_header) => {
-                [ipv4_header.src_ip().into(), ipv4_header.dst_ip().into()]
-            },
-            OuterIpHeader::V6(ipv6_header) => {
-                [ipv6_header.src_ip().into(), ipv6_header.dst_ip().into()]
-            },
-        };
-
-        match &tun {
-            TunnelLayer::Vxlan(vxlan) => {
-                sv.push(VniLayer::Vxlan { vni: vxlan.vni(), group_id: 0, endpoints });
-            }
-            TunnelLayer::Geneve(geneve) => {
-                sv.push(VniLayer::Geneve { vni: geneve.header.vni(), protocol_type: geneve.header.protocol_type_raw(), endpoints });
-            }
-            TunnelLayer::Gre(gre) => {
-                sv.push(VniLayer::Gre { protocol_type: gre.header.protocol_type().into(), key: gre.key(), endpoints });
-            }
-            TunnelLayer::Teredo(_teredo) => {
-                sv.push(VniLayer::Teredo { endpoints });
-            }
-            TunnelLayer::Gtpv1(gtp) => {
-                sv.push(VniLayer::GtpU { teid: gtp.header.teid(), endpoints });
-            }
-            TunnelLayer::Gtpv2(_gtp) => {
-                // GTPv2 is control plane, not a tunnel for VNI purposes
-            }
-            TunnelLayer::L2tpv2(l2tp) => {
-                sv.push(VniLayer::L2tpV2 { tunnel_id: l2tp.tunnel_id(), session_id: l2tp.session_id(), endpoints });
-            }
-            TunnelLayer::L2tpv3(l2tp) => {
-                sv.push(VniLayer::L2tpV3 { session_id: l2tp.session_id(), endpoints });
-            }
-            TunnelLayer::Nvgre(nvgre) => {
-                sv.push(VniLayer::NvGre { protocol_type: nvgre.protocol_type_raw(), vsid_flowid: nvgre.vsid() << 8 | nvgre.flow_id() as u32, endpoints });
-            }
-            TunnelLayer::Pbb(pbb) => {
-                // PBB (Provider Backbone Bridge) is MAC-in-MAC, doesn't need IP endpoints
-                sv.push(VniLayer::Pbb {
-                    isid: pbb.isid(),
-                    bvid: pbb.bvid(),
-                });
-            }
-            TunnelLayer::Stt(stt) => {
-                sv.push(VniLayer::Stt { context_id: stt.context_id(), endpoints });
-            }
-            TunnelLayer::Pptp(pptp) => {
-                sv.push(VniLayer::Pptp { call_id: pptp.header.call_id(), endpoints });
-            }
-            TunnelLayer::Ipip(ipip) => {
-                // IPIP tunnels have access to outer IP headers
-                match ipip.outer_header() {
-                    crate::packet::tunnel::ipip::OuterIpHeader::V4(ipv4) => {
-                        let src = ipv4.header.src_ip_raw();
-                        let dst = ipv4.header.dst_ip_raw();
-                        let mut endpoints = [IpAddr::V4(Ipv4Addr::from(src)), IpAddr::V4(Ipv4Addr::from(dst))];
-                        endpoints.sort();
-
-                        match ipip.tunnel_type() {
-                            crate::packet::tunnel::ipip::IpipType::Ipip => {
-                                sv.push(VniLayer::Ipip { endpoints });
-                            }
-                            crate::packet::tunnel::ipip::IpipType::Sit => {
-                                sv.push(VniLayer::Sit { endpoints });
-                            }
-                            _ => {}
-                        }
-                    }
-                    crate::packet::tunnel::ipip::OuterIpHeader::V6(ipv6) => {
-                        let src = ipv6.header.src_ip_raw();
-                        let dst = ipv6.header.dst_ip_raw();
-                        let mut endpoints = [IpAddr::V6(Ipv6Addr::from(dst)), IpAddr::V6(Ipv6Addr::from(src))];
-                        endpoints.sort();
-
-                        match ipip.tunnel_type() {
-                            crate::packet::tunnel::ipip::IpipType::Ip4in6 => {
-                                sv.push(VniLayer::Ip4in6 { endpoints });
-                            }
-                            crate::packet::tunnel::ipip::IpipType::Ip6Tnl => {
-                                sv.push(VniLayer::Ip6Tnl { endpoints });
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        sv
-    }
-}
-
-impl From<&NetworkTunnelLayer<'_>> for SmallVec<[VniLayer; 2]> {
-    fn from(ip_tunnel: &NetworkTunnelLayer<'_>) -> Self {
-        let mut sv = SmallVec::<[VniLayer; 2]>::new();
-
+impl TryFrom<&NetworkTunnelLayer<'_>> for VniLayer {
+    type Error = ();
+    fn try_from(ip_tunnel: &NetworkTunnelLayer<'_>) -> Result<Self, Self::Error> {
         // Extract endpoints from outer IP header if present
         let endpoints: Option<[IpAddr; 2]> = ip_tunnel.outer().and_then(|outer| {
             match outer {
-                NetworkLayer::Ipv4(ipv4) => {
-                    Some([ipv4.src_ip().into(), ipv4.dst_ip().into()])
-                }
-                NetworkLayer::Ipv6(ipv6) => {
-                    Some([ipv6.src_ip().into(), ipv6.dst_ip().into()])
-                }
+                NetworkLayer::Ipv4(ipv4) => Some([ipv4.src_ip().into(), ipv4.dst_ip().into()]),
+                NetworkLayer::Ipv6(ipv6) => Some([ipv6.src_ip().into(), ipv6.dst_ip().into()]),
                 NetworkLayer::Mpls(_) => None, // MPLS doesn't have IP endpoints
             }
         });
 
         // Process the tunnel based on type
         match ip_tunnel.tunnel() {
-            TunnelLayer::Vxlan(vxlan) => {
-                if let Some(endpoints) = endpoints {
-                    sv.push(VniLayer::Vxlan { vni: vxlan.vni(), group_id: 0, endpoints });
-                }
-            }
-            TunnelLayer::Geneve(geneve) => {
-                if let Some(endpoints) = endpoints {
-                    sv.push(VniLayer::Geneve {
-                        vni: geneve.header.vni(),
-                        protocol_type: geneve.header.protocol_type_raw(),
-                        endpoints
-                    });
-                }
-            }
-            TunnelLayer::Gre(gre) => {
-                if let Some(endpoints) = endpoints {
-                    sv.push(VniLayer::Gre {
-                        protocol_type: gre.header.protocol_type().into(),
-                        key: gre.key(),
-                        endpoints
-                    });
-                }
-            }
-            TunnelLayer::Teredo(_teredo) => {
-                if let Some(endpoints) = endpoints {
-                    sv.push(VniLayer::Teredo { endpoints });
-                }
-            }
-            TunnelLayer::Gtpv1(gtp) => {
-                if let Some(endpoints) = endpoints {
-                    sv.push(VniLayer::GtpU { teid: gtp.header.teid(), endpoints });
-                }
-            }
+            TunnelLayer::Vxlan(vxlan) => endpoints.ok_or(()).map(|endpoints| VniLayer::Vxlan {
+                vni: vxlan.vni(),
+                group_id: 0,
+                endpoints,
+            }),
+            TunnelLayer::Geneve(geneve) => endpoints.ok_or(()).map(|endpoints| VniLayer::Geneve {
+                vni: geneve.header.vni(),
+                protocol_type: geneve.header.protocol_type_raw(),
+                endpoints,
+            }),
+            TunnelLayer::Gre(gre) => endpoints.ok_or(()).map(|endpoints| VniLayer::Gre {
+                protocol_type: gre.header.protocol_type().into(),
+                key: gre.key(),
+                endpoints,
+            }),
+            TunnelLayer::Teredo(_teredo) => endpoints
+                .ok_or(())
+                .map(|endpoints| VniLayer::Teredo { endpoints }),
+            TunnelLayer::Gtpv1(gtp) => endpoints.ok_or(()).map(|endpoints| VniLayer::GtpU {
+                teid: gtp.header.teid(),
+                endpoints,
+            }),
             TunnelLayer::Gtpv2(_gtp) => {
                 // GTPv2 is control plane, not a tunnel for VNI purposes
+                Err(())
             }
-            TunnelLayer::L2tpv2(l2tp) => {
-                if let Some(endpoints) = endpoints {
-                    sv.push(VniLayer::L2tpV2 {
-                        tunnel_id: l2tp.tunnel_id(),
-                        session_id: l2tp.session_id(),
-                        endpoints
-                    });
-                }
-            }
-            TunnelLayer::L2tpv3(l2tp) => {
-                if let Some(endpoints) = endpoints {
-                    sv.push(VniLayer::L2tpV3 { session_id: l2tp.session_id(), endpoints });
-                }
-            }
-            TunnelLayer::Nvgre(nvgre) => {
-                if let Some(endpoints) = endpoints {
-                    sv.push(VniLayer::NvGre {
-                        protocol_type: nvgre.protocol_type_raw(),
-                        vsid_flowid: nvgre.vsid() << 8 | nvgre.flow_id() as u32,
-                        endpoints
-                    });
-                }
-            }
+            TunnelLayer::L2tpv2(l2tp) => endpoints.ok_or(()).map(|endpoints| VniLayer::L2tpV2 {
+                tunnel_id: l2tp.tunnel_id(),
+                session_id: l2tp.session_id(),
+                endpoints,
+            }),
+            TunnelLayer::L2tpv3(l2tp) => endpoints.ok_or(()).map(|endpoints| VniLayer::L2tpV3 {
+                session_id: l2tp.session_id(),
+                endpoints,
+            }),
+            TunnelLayer::Nvgre(nvgre) => endpoints.ok_or(()).map(|endpoints| VniLayer::NvGre {
+                protocol_type: nvgre.protocol_type_raw(),
+                vsid_flowid: nvgre.vsid() << 8 | nvgre.flow_id() as u32,
+                endpoints,
+            }),
             TunnelLayer::Pbb(pbb) => {
                 // PBB (Provider Backbone Bridge) is MAC-in-MAC, doesn't need IP endpoints
-                sv.push(VniLayer::Pbb {
+                Ok(VniLayer::Pbb {
                     isid: pbb.isid(),
                     bvid: pbb.bvid(),
-                });
+                })
             }
-            TunnelLayer::Stt(stt) => {
-                if let Some(endpoints) = endpoints {
-                    sv.push(VniLayer::Stt { context_id: stt.context_id(), endpoints });
-                }
-            }
-            TunnelLayer::Pptp(pptp) => {
-                if let Some(endpoints) = endpoints {
-                    sv.push(VniLayer::Pptp { call_id: pptp.header.call_id(), endpoints });
-                }
-            }
+            TunnelLayer::Stt(stt) => endpoints.ok_or(()).map(|endpoints| VniLayer::Stt {
+                context_id: stt.context_id(),
+                endpoints,
+            }),
+            TunnelLayer::Pptp(pptp) => endpoints.ok_or(()).map(|endpoints| VniLayer::Pptp {
+                call_id: pptp.header.call_id(),
+                endpoints,
+            }),
             TunnelLayer::Ipip(ipip) => {
                 // IPIP tunnels have access to outer IP headers embedded in the tunnel
                 match ipip.outer_header() {
                     crate::packet::tunnel::ipip::OuterIpHeader::V4(ipv4) => {
                         let src = ipv4.header.src_ip_raw();
                         let dst = ipv4.header.dst_ip_raw();
-                        let mut endpoints = [IpAddr::V4(Ipv4Addr::from(src)), IpAddr::V4(Ipv4Addr::from(dst))];
+                        let mut endpoints = [
+                            IpAddr::V4(Ipv4Addr::from(src)),
+                            IpAddr::V4(Ipv4Addr::from(dst)),
+                        ];
                         endpoints.sort();
 
                         match ipip.tunnel_type() {
                             crate::packet::tunnel::ipip::IpipType::Ipip => {
-                                sv.push(VniLayer::Ipip { endpoints });
+                                Ok(VniLayer::Ipip { endpoints })
                             }
                             crate::packet::tunnel::ipip::IpipType::Sit => {
-                                sv.push(VniLayer::Sit { endpoints });
+                                Ok(VniLayer::Sit { endpoints })
                             }
-                            _ => {}
+                            _ => Err(()),
                         }
                     }
                     crate::packet::tunnel::ipip::OuterIpHeader::V6(ipv6) => {
                         let src = ipv6.header.src_ip_raw();
                         let dst = ipv6.header.dst_ip_raw();
-                        let mut endpoints = [IpAddr::V6(Ipv6Addr::from(dst)), IpAddr::V6(Ipv6Addr::from(src))];
+                        let mut endpoints = [
+                            IpAddr::V6(Ipv6Addr::from(dst)),
+                            IpAddr::V6(Ipv6Addr::from(src)),
+                        ];
                         endpoints.sort();
 
                         match ipip.tunnel_type() {
                             crate::packet::tunnel::ipip::IpipType::Ip4in6 => {
-                                sv.push(VniLayer::Ip4in6 { endpoints });
+                                Ok(VniLayer::Ip4in6 { endpoints })
                             }
                             crate::packet::tunnel::ipip::IpipType::Ip6Tnl => {
-                                sv.push(VniLayer::Ip6Tnl { endpoints });
+                                Ok(VniLayer::Ip6Tnl { endpoints })
                             }
-                            _ => {}
+                            _ => Err(()),
                         }
                     }
                 }
             }
         }
-
-        sv
     }
 }
 
+/// Convert a Packet to a VNI layer stack
+///
+/// This efficiently extracts VNI information from:
+/// 1. Link layer (VLAN tags) - produces SmallVec<[VniLayer; 2]>
+/// 2. Tunnel layers - each NetworkTunnelLayer converted to VniLayer
+///
+/// The result is the concatenation of link VNI layers followed by tunnel VNI layers.
+/// This operation may fail (returning Err(())) if any tunnel layer cannot be converted.
+impl TryFrom<&Packet<'_>> for SmallVec<[VniLayer; 4]> {
+    type Error = ();
+
+    fn try_from(packet: &Packet<'_>) -> Result<Self, Self::Error> {
+        let mut vni_stack: SmallVec<[VniLayer; 4]> = SmallVec::new();
+
+        // Extract VLAN information from link layer directly into vni_stack
+        // This avoids creating a temporary SmallVec
+        match packet.link() {
+            LinkLayer::Ethernet(EtherHeaderVlan::VLAN8021Q(_, eth8021q)) => {
+                vni_stack.push(VniLayer::Vlan {
+                    vid: eth8021q.vlan_id(),
+                });
+            }
+            LinkLayer::Ethernet(EtherHeaderVlan::VLAN8021QNested(_, eth8021q, eth8021q_n)) => {
+                vni_stack.push(VniLayer::Vlan {
+                    vid: eth8021q.vlan_id(),
+                });
+                vni_stack.push(VniLayer::Vlan {
+                    vid: eth8021q_n.vlan_id(),
+                });
+            }
+            _ => {
+                // No VLAN, nothing to add
+            }
+        }
+
+        // Process each tunnel layer
+        for network_tunnel in packet.tunnels() {
+            // Try to convert NetworkTunnelLayer to VniLayer
+            match VniLayer::try_from(network_tunnel) {
+                Ok(vni_layer) => vni_stack.push(vni_layer),
+                Err(_) => {
+                    // Skip tunnels that don't have VNI semantics (like GTPv2 control plane)
+                    continue;
+                }
+            }
+        }
+
+        Ok(vni_stack)
+    }
+}
 
 /// VNI identifier (opaque handle)
 ///
@@ -769,8 +704,6 @@ mod tests {
     // VniLayer Tests - Construction and Display
     // ========================================================================
 
-
-
     // ========================================================================
     // VniLayer Equality and Ordering Tests
     // ========================================================================
@@ -870,12 +803,12 @@ mod tests {
         let mut mapper = VniMapper::new();
         let vlan = VniLayer::Vlan { vid: 100 };
 
-        let id = mapper.get_or_create_vni_id(&[vlan.clone()]);
+        let id = mapper.get_or_create_vni_id(std::slice::from_ref(&vlan));
         assert_eq!(mapper.len(), 1);
         assert!(!mapper.is_empty());
 
         // Same stack should return same ID
-        let id2 = mapper.get_or_create_vni_id(&[vlan.clone()]);
+        let id2 = mapper.get_or_create_vni_id(std::slice::from_ref(&vlan));
         assert_eq!(id, id2);
         assert_eq!(mapper.len(), 1); // No new entry created
 
@@ -907,8 +840,8 @@ mod tests {
         let vlan200 = VniLayer::Vlan { vid: 200 };
         let mpls = VniLayer::Mpls { label: 1000 };
 
-        let id1 = mapper.get_or_create_vni_id(&[vlan100.clone()]);
-        let id2 = mapper.get_or_create_vni_id(&[vlan200.clone()]);
+        let id1 = mapper.get_or_create_vni_id(std::slice::from_ref(&vlan100));
+        let id2 = mapper.get_or_create_vni_id(std::slice::from_ref(&vlan200));
         let id3 = mapper.get_or_create_vni_id(&[vlan100.clone(), mpls.clone()]);
 
         assert_ne!(id1, id2);
@@ -944,7 +877,7 @@ mod tests {
         let mut mapper = VniMapper::new();
         let vlan = VniLayer::Vlan { vid: 100 };
 
-        let id1 = mapper.get_or_create_vni_id(&[vlan.clone()]);
+        let id1 = mapper.get_or_create_vni_id(std::slice::from_ref(&vlan));
         assert_eq!(mapper.len(), 1);
 
         mapper.clear();
@@ -1017,7 +950,8 @@ mod tests {
         };
         let inner_vlan = VniLayer::Vlan { vid: 200 };
 
-        let id = mapper.get_or_create_vni_id(&[outer_vlan.clone(), vxlan.clone(), inner_vlan.clone()]);
+        let id =
+            mapper.get_or_create_vni_id(&[outer_vlan.clone(), vxlan.clone(), inner_vlan.clone()]);
 
         let stack = mapper.lookup_vni(id).unwrap();
         assert_eq!(stack.len(), 3);
@@ -1131,8 +1065,12 @@ mod tests {
             IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)),
         ];
 
-        let ipip_v4 = VniLayer::Ipip { endpoints: endpoints1 };
-        let ipip_v6 = VniLayer::Ip6Tnl { endpoints: endpoints2 };
+        let ipip_v4 = VniLayer::Ipip {
+            endpoints: endpoints1,
+        };
+        let ipip_v6 = VniLayer::Ip6Tnl {
+            endpoints: endpoints2,
+        };
 
         assert_ne!(ipip_v4, ipip_v6);
     }
@@ -1147,7 +1085,11 @@ mod tests {
 
         // VniLayer should be reasonably sized (less than 64 bytes on 64-bit systems)
         // The largest variant is likely Stt or one with [IpAddr; 2] which is 2*32=64 bytes for IPv6
-        assert!(size <= 128, "VniLayer size is {}, expected <= 128 bytes", size);
+        assert!(
+            size <= 128,
+            "VniLayer size is {}, expected <= 128 bytes",
+            size
+        );
     }
 
     #[test]
@@ -1181,8 +1123,6 @@ mod tests {
         let entries: Vec<_> = mapper.iter().collect();
         assert_eq!(entries.len(), 3);
     }
-
-
 
     // ========================================================================
     // From<LinkLayer> Conversion Tests
@@ -1244,8 +1184,12 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
         ];
 
-        let ipip1 = VniLayer::Ipip { endpoints: endpoints1 };
-        let ipip2 = VniLayer::Ipip { endpoints: endpoints2 };
+        let ipip1 = VniLayer::Ipip {
+            endpoints: endpoints1,
+        };
+        let ipip2 = VniLayer::Ipip {
+            endpoints: endpoints2,
+        };
 
         // Different endpoint order should be different
         assert_ne!(ipip1, ipip2);
@@ -1293,21 +1237,66 @@ mod tests {
         let layers = vec![
             VniLayer::Vlan { vid: 100 },
             VniLayer::Mpls { label: 1000 },
-            VniLayer::Gre { protocol_type: 0x0800, key: None, endpoints: endpoints_v4 },
-            VniLayer::NvGre { protocol_type: 0x6558, vsid_flowid: 100, endpoints: endpoints_v4 },
-            VniLayer::Vxlan { vni: 5000, group_id: 0, endpoints: endpoints_v4 },
-            VniLayer::Geneve { vni: 1000, protocol_type: 0x6558, endpoints: endpoints_v6 },
-            VniLayer::Ipip { endpoints: endpoints_v4 },
-            VniLayer::Ip4in6 { endpoints: endpoints_v6 },
-            VniLayer::Sit { endpoints: endpoints_v4 },
-            VniLayer::Ip6Tnl { endpoints: endpoints_v6 },
-            VniLayer::GtpU { teid: 0x12345678, endpoints: endpoints_v4 },
-            VniLayer::Teredo { endpoints: endpoints_v4 },
-            VniLayer::L2tpV2 { tunnel_id: 100, session_id: 200, endpoints: endpoints_v4 },
-            VniLayer::L2tpV3 { session_id: 0xabcdef, endpoints: endpoints_v6 },
-            VniLayer::Pbb { isid: 0x123456, bvid: Some(100) },
-            VniLayer::Stt { context_id: 0x123456789abcdef0, endpoints: endpoints_v4 },
-            VniLayer::Pptp { call_id: 1234, endpoints: endpoints_v4 },
+            VniLayer::Gre {
+                protocol_type: 0x0800,
+                key: None,
+                endpoints: endpoints_v4,
+            },
+            VniLayer::NvGre {
+                protocol_type: 0x6558,
+                vsid_flowid: 100,
+                endpoints: endpoints_v4,
+            },
+            VniLayer::Vxlan {
+                vni: 5000,
+                group_id: 0,
+                endpoints: endpoints_v4,
+            },
+            VniLayer::Geneve {
+                vni: 1000,
+                protocol_type: 0x6558,
+                endpoints: endpoints_v6,
+            },
+            VniLayer::Ipip {
+                endpoints: endpoints_v4,
+            },
+            VniLayer::Ip4in6 {
+                endpoints: endpoints_v6,
+            },
+            VniLayer::Sit {
+                endpoints: endpoints_v4,
+            },
+            VniLayer::Ip6Tnl {
+                endpoints: endpoints_v6,
+            },
+            VniLayer::GtpU {
+                teid: 0x12345678,
+                endpoints: endpoints_v4,
+            },
+            VniLayer::Teredo {
+                endpoints: endpoints_v4,
+            },
+            VniLayer::L2tpV2 {
+                tunnel_id: 100,
+                session_id: 200,
+                endpoints: endpoints_v4,
+            },
+            VniLayer::L2tpV3 {
+                session_id: 0xabcdef,
+                endpoints: endpoints_v6,
+            },
+            VniLayer::Pbb {
+                isid: 0x123456,
+                bvid: Some(100),
+            },
+            VniLayer::Stt {
+                context_id: 0x123456789abcdef0,
+                endpoints: endpoints_v4,
+            },
+            VniLayer::Pptp {
+                call_id: 1234,
+                endpoints: endpoints_v4,
+            },
         ];
 
         // Each should get a unique ID
@@ -1322,12 +1311,14 @@ mod tests {
         // All IDs should be unique
         for i in 0..ids.len() {
             for j in (i + 1)..ids.len() {
-                assert_ne!(ids[i], ids[j], "IDs at positions {} and {} should be different", i, j);
+                assert_ne!(
+                    ids[i], ids[j],
+                    "IDs at positions {} and {} should be different",
+                    i, j
+                );
             }
         }
     }
-
-
 
     #[test]
     fn test_vni_id_ordering() {
@@ -1464,8 +1455,6 @@ mod tests {
         };
 
         assert_ne!(vxlan1, vxlan2);
-
-
     }
 
     #[test]
@@ -1486,7 +1475,6 @@ mod tests {
             vsid_flowid: combined,
             endpoints,
         };
-
     }
 
     #[test]
@@ -1547,8 +1535,12 @@ mod tests {
             IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0x0a00, 0x0002)),
         ];
 
-        let ipip_v4 = VniLayer::Ipip { endpoints: endpoints_v4 };
-        let ipip_v6_as_ip6tnl = VniLayer::Ip6Tnl { endpoints: endpoints_v6 };
+        let ipip_v4 = VniLayer::Ipip {
+            endpoints: endpoints_v4,
+        };
+        let ipip_v6_as_ip6tnl = VniLayer::Ip6Tnl {
+            endpoints: endpoints_v6,
+        };
 
         // Different types and IP versions
         assert_ne!(format!("{:?}", ipip_v4), format!("{:?}", ipip_v6_as_ip6tnl));
@@ -1602,7 +1594,11 @@ mod tests {
             VniLayer::Vlan { vid: 100 },
             VniLayer::Mpls { label: 1000 },
             VniLayer::Vlan { vid: 200 },
-            VniLayer::Vxlan { vni: 5000, group_id: 0, endpoints },
+            VniLayer::Vxlan {
+                vni: 5000,
+                group_id: 0,
+                endpoints,
+            },
             VniLayer::Vlan { vid: 300 },
             VniLayer::Mpls { label: 2000 },
         ];
@@ -1614,6 +1610,276 @@ mod tests {
         for (i, layer) in layers.iter().enumerate() {
             assert_eq!(&retrieved[i], layer);
         }
+    }
+
+    // ========================================================================
+    // TryFrom<&Packet> Conversion Tests
+    // ========================================================================
+
+    #[test]
+    fn test_packet_to_vni_empty() {
+        use crate::packet::iter::LinkType;
+        use crate::packet::{Packet, ParseMode};
+
+        // Simple Ethernet + IPv4 packet (no VLAN, no tunnel)
+        let packet_bytes = vec![
+            // Ethernet header
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // dst MAC
+            0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, // src MAC
+            0x08, 0x00, // EtherType: IPv4
+            // IPv4 header (minimal, 20 bytes)
+            0x45, 0x00, 0x00, 0x1c, // version, IHL, DSCP, total length (28)
+            0x00, 0x00, 0x00, 0x00, // ID, flags
+            0x40, 0x01, 0x00, 0x00, // TTL, protocol (ICMP), checksum
+            0x0a, 0x00, 0x00, 0x01, // src IP
+            0x0a, 0x00, 0x00, 0x02, // dst IP
+            // ICMP Echo Request
+            0x08, 0x00, 0x00, 0x00, // type, code, checksum
+            0x00, 0x01, 0x00, 0x01, // ID, sequence
+        ];
+
+        let packet = Packet::from_bytes(&packet_bytes, LinkType::Ethernet, ParseMode::Outermost)
+            .expect("Should parse packet");
+
+        let vni_stack: SmallVec<[VniLayer; 4]> =
+            (&packet).try_into().expect("Should convert to VNI stack");
+
+        // No VLAN, no tunnel = empty VNI stack
+        assert_eq!(vni_stack.len(), 0);
+    }
+
+    #[test]
+    fn test_packet_to_vni_vlan_only() {
+        use crate::packet::iter::LinkType;
+        use crate::packet::{Packet, ParseMode};
+
+        // Ethernet + 802.1Q VLAN + IPv4
+        let packet_bytes = vec![
+            // Ethernet header
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // dst MAC
+            0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, // src MAC
+            0x81, 0x00, // EtherType: 802.1Q
+            // VLAN tag
+            0x00, 0x64, // PCP=0, DEI=0, VID=100
+            0x08, 0x00, // EtherType: IPv4
+            // IPv4 header
+            0x45, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0x0a, 0x00,
+            0x00, 0x01, 0x0a, 0x00, 0x00, 0x02, // ICMP
+            0x08, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01,
+        ];
+
+        let packet = Packet::from_bytes(&packet_bytes, LinkType::Ethernet, ParseMode::Outermost)
+            .expect("Should parse packet");
+
+        let vni_stack: SmallVec<[VniLayer; 4]> =
+            (&packet).try_into().expect("Should convert to VNI stack");
+
+        // Should have 1 VLAN layer
+        assert_eq!(vni_stack.len(), 1);
+        assert!(matches!(vni_stack[0], VniLayer::Vlan { vid: 100 }));
+    }
+
+    #[test]
+    fn test_packet_to_vni_vxlan_tunnel() {
+        use crate::packet::iter::LinkType;
+        use crate::packet::{Packet, ParseMode};
+
+        // Create a VXLAN packet: Ethernet + IPv4 + UDP + VXLAN + inner Ethernet
+        let mut packet_bytes = Vec::new();
+
+        // Outer Ethernet
+        packet_bytes.extend_from_slice(&[
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // dst MAC
+            0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, // src MAC
+            0x08, 0x00, // EtherType: IPv4
+        ]);
+
+        // Outer IPv4
+        packet_bytes.extend_from_slice(&[
+            0x45, 0x00, 0x00, 0x3c, // version, IHL, total length (60 bytes)
+            0x00, 0x00, 0x00, 0x00, // ID, flags
+            0x40, 0x11, 0x00, 0x00, // TTL=64, protocol=UDP, checksum
+            10, 0, 0, 1, // src IP: 10.0.0.1
+            10, 0, 0, 2, // dst IP: 10.0.0.2
+        ]);
+
+        // UDP header
+        packet_bytes.extend_from_slice(&[
+            0x30, 0x39, // src port: 12345
+            0x12, 0xb5, // dst port: 4789 (VXLAN)
+            0x00, 0x28, // length: 40 bytes
+            0x00, 0x00, // checksum
+        ]);
+
+        // VXLAN header
+        packet_bytes.extend_from_slice(&[
+            0x08, 0x00, 0x00, 0x00, // flags (I=1)
+            0x00, 0x01, 0xf4, 0x00, // VNI=500 (0x1f4)
+        ]);
+
+        // Inner Ethernet
+        packet_bytes.extend_from_slice(&[
+            0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x08,
+            0x00, // EtherType: IPv4
+        ]);
+
+        // Inner IPv4 (with ICMP)
+        packet_bytes.extend_from_slice(&[
+            0x45, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 192, 168, 1, 1,
+            192, 168, 1, 2, // ICMP
+            0x08, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01,
+        ]);
+
+        let packet = Packet::from_bytes(&packet_bytes, LinkType::Ethernet, ParseMode::Innermost)
+            .expect("Should parse VXLAN packet");
+
+        let vni_stack: SmallVec<[VniLayer; 4]> =
+            (&packet).try_into().expect("Should convert to VNI stack");
+
+        // Should have 1 VXLAN tunnel layer
+        assert_eq!(vni_stack.len(), 1);
+        match &vni_stack[0] {
+            VniLayer::Vxlan { vni, endpoints, .. } => {
+                assert_eq!(*vni, 500);
+                // Check endpoints are the outer IPs
+                assert!(endpoints.contains(&IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+                assert!(endpoints.contains(&IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2))));
+            }
+            _ => panic!("Expected VXLAN layer"),
+        }
+    }
+
+    #[test]
+    fn test_packet_to_vni_vlan_plus_vxlan() {
+        use crate::packet::iter::LinkType;
+        use crate::packet::{Packet, ParseMode};
+
+        // VLAN + VXLAN tunnel
+        let mut packet_bytes = Vec::new();
+
+        // Outer Ethernet with VLAN
+        packet_bytes.extend_from_slice(&[
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0x81,
+            0x00, // EtherType: 802.1Q
+            0x00, 0xc8, // VID=200
+            0x08, 0x00, // EtherType: IPv4
+        ]);
+
+        // Outer IPv4
+        packet_bytes.extend_from_slice(&[
+            0x45, 0x00, 0x00, 0x3c, 0x00, 0x00, 0x00, 0x00, 0x40, 0x11, 0x00, 0x00, 172, 16, 0, 1,
+            172, 16, 0, 2,
+        ]);
+
+        // UDP
+        packet_bytes.extend_from_slice(&[0x30, 0x39, 0x12, 0xb5, 0x00, 0x28, 0x00, 0x00]);
+
+        // VXLAN
+        packet_bytes.extend_from_slice(&[
+            0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00, // VNI=10
+        ]);
+
+        // Inner Ethernet
+        packet_bytes.extend_from_slice(&[
+            0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x08, 0x00,
+        ]);
+
+        // Inner IPv4
+        packet_bytes.extend_from_slice(&[
+            0x45, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 192, 168, 1, 1,
+            192, 168, 1, 2, // ICMP
+            0x08, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01,
+        ]);
+
+        let packet = Packet::from_bytes(&packet_bytes, LinkType::Ethernet, ParseMode::Innermost)
+            .expect("Should parse packet");
+
+        let vni_stack: SmallVec<[VniLayer; 4]> =
+            (&packet).try_into().expect("Should convert to VNI stack");
+
+        // In Innermost mode, the parser overrides the link layer with the inner Ethernet,
+        // so we only get the VXLAN tunnel (the outer VLAN is lost)
+        assert_eq!(
+            vni_stack.len(),
+            1,
+            "Expected 1 layer (VXLAN only), got {}",
+            vni_stack.len()
+        );
+
+        // Should be VXLAN
+        match &vni_stack[0] {
+            VniLayer::Vxlan { vni, endpoints, .. } => {
+                assert_eq!(*vni, 10);
+                // Verify endpoints
+                assert!(endpoints.contains(&IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1))));
+                assert!(endpoints.contains(&IpAddr::V4(Ipv4Addr::new(172, 16, 0, 2))));
+            }
+            _ => panic!("Expected VXLAN layer"),
+        }
+    }
+
+    #[test]
+    fn test_packet_to_vni_nested_vlan() {
+        use crate::packet::iter::LinkType;
+        use crate::packet::{Packet, ParseMode};
+
+        // Q-in-Q (nested VLAN)
+        let packet_bytes = vec![
+            // Ethernet
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0x81,
+            0x00, // EtherType: 802.1Q
+            0x00, 0x64, // Outer VLAN: VID=100
+            0x81, 0x00, // EtherType: 802.1Q (nested)
+            0x00, 0xc8, // Inner VLAN: VID=200
+            0x08, 0x00, // EtherType: IPv4
+            // IPv4
+            0x45, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0x0a, 0x00,
+            0x00, 0x01, 0x0a, 0x00, 0x00, 0x02, // ICMP
+            0x08, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01,
+        ];
+
+        let packet = Packet::from_bytes(&packet_bytes, LinkType::Ethernet, ParseMode::Outermost)
+            .expect("Should parse packet");
+
+        let vni_stack: SmallVec<[VniLayer; 4]> =
+            (&packet).try_into().expect("Should convert to VNI stack");
+
+        // Should have 2 VLAN layers
+        assert_eq!(vni_stack.len(), 2);
+        assert!(matches!(vni_stack[0], VniLayer::Vlan { vid: 100 }));
+        assert!(matches!(vni_stack[1], VniLayer::Vlan { vid: 200 }));
+    }
+
+    #[test]
+    fn test_packet_to_vni_with_vni_mapper() {
+        use crate::packet::iter::LinkType;
+        use crate::packet::{Packet, ParseMode};
+
+        // Test integration with VniMapper
+        let packet_bytes = vec![
+            // Ethernet with VLAN
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0x81, 0x00,
+            0x01, 0x2c, // VID=300
+            0x08, 0x00, // IPv4
+            0x45, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0x0a, 0x00,
+            0x00, 0x01, 0x0a, 0x00, 0x00, 0x02, // ICMP
+            0x08, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01,
+        ];
+
+        let packet = Packet::from_bytes(&packet_bytes, LinkType::Ethernet, ParseMode::Outermost)
+            .expect("Should parse packet");
+
+        let vni_stack: SmallVec<[VniLayer; 4]> =
+            (&packet).try_into().expect("Should convert to VNI stack");
+
+        // Use with VniMapper
+        let mut mapper = VniMapper::new();
+        let vni_id = mapper.get_or_create_vni_id(&vni_stack);
+
+        // Should be able to look it up
+        let retrieved = mapper.lookup_vni(vni_id).unwrap();
+        assert_eq!(retrieved.len(), 1);
+        assert!(matches!(retrieved[0], VniLayer::Vlan { vid: 300 }));
     }
 
     #[test]
@@ -1630,8 +1896,6 @@ mod tests {
         assert_ne!(id_zero, id_max);
         assert_ne!(id_mid, id_max);
     }
-
-
 
     #[test]
     fn test_regression_mapper_clear_and_reuse() {
@@ -1672,7 +1936,11 @@ mod tests {
 
         let vlan100 = VniLayer::Vlan { vid: 100 };
         let vlan200 = VniLayer::Vlan { vid: 200 };
-        let vxlan = VniLayer::Vxlan { vni: 5000, group_id: 0, endpoints };
+        let vxlan = VniLayer::Vxlan {
+            vni: 5000,
+            group_id: 0,
+            endpoints,
+        };
 
         // Different orderings and combinations
         let id1 = mapper.get_or_create_vni_id(&[vlan100.clone(), vxlan.clone()]);
@@ -1690,5 +1958,4 @@ mod tests {
 
         assert_eq!(mapper.len(), 4);
     }
-
 }
