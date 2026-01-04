@@ -377,6 +377,64 @@ pub enum TunnelLayer<'a> {
     Ipip(IpipTunnel<'a>),
 }
 
+/// IP Tunnel Layer - combines outer IP encapsulation with tunnel protocol
+///
+/// Most tunnel protocols are encapsulated in IP (e.g., VXLAN over UDP/IP, GRE over IP).
+/// This structure preserves the outer IP header that encapsulates the tunnel.
+/// 
+/// Some tunnels like PBB (MAC-in-MAC) operate at layer 2 and don't have an outer IP header,
+/// so the `outer` field is optional.
+#[derive(Debug, Clone)]
+pub struct IpTunnelLayer<'a> {
+    /// Outer IP header (IPv4 or IPv6) that encapsulates the tunnel.
+    /// None for layer 2 tunnels like PBB.
+    pub outer: Option<NetworkLayer<'a>>,
+    /// The tunnel protocol layer
+    pub tunnel: TunnelLayer<'a>,
+}
+
+impl<'a> IpTunnelLayer<'a> {
+    /// Create a new IP tunnel layer with an outer IP header
+    #[inline]
+    pub fn new(outer: NetworkLayer<'a>, tunnel: TunnelLayer<'a>) -> Self {
+        Self {
+            outer: Some(outer),
+            tunnel,
+        }
+    }
+
+    /// Create a new tunnel layer without an outer IP header (e.g., PBB)
+    #[inline]
+    pub fn new_l2(tunnel: TunnelLayer<'a>) -> Self {
+        Self {
+            outer: None,
+            tunnel,
+        }
+    }
+
+    /// Get the outer IP header, if present
+    #[inline]
+    pub fn outer(&self) -> Option<&NetworkLayer<'a>> {
+        self.outer.as_ref()
+    }
+
+    /// Get the tunnel layer
+    #[inline]
+    pub fn tunnel(&self) -> &TunnelLayer<'a> {
+        &self.tunnel
+    }
+}
+
+impl std::fmt::Display for IpTunnelLayer<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(ref outer) = self.outer {
+            write!(f, "{} > {}", outer, self.tunnel)
+        } else {
+            write!(f, "{}", self.tunnel)
+        }
+    }
+}
+
 impl std::fmt::Display for TunnelLayer<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

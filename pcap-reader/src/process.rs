@@ -199,8 +199,8 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
             }
 
             // Update stats for tunnel layers
-            for tunnel in packet.tunnels() {
-                match tunnel {
+            for ip_tunnel in packet.tunnels() {
+                match &ip_tunnel.tunnel {
                     TunnelLayer::Vxlan(_) => local_stats.vxlan += 1,
                     TunnelLayer::Geneve(_) => local_stats.geneve += 1,
                     TunnelLayer::Gre(_) => local_stats.gre += 1,

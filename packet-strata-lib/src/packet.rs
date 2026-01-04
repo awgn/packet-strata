@@ -11,7 +11,7 @@ use crate::packet::{
         find_ipv6_upper_protocol, is_stt_port, NextLayer, TunnelType,
     },
     ether::EtherHeader,
-    header::{LinkLayer, NetworkLayer, TransportLayer, TunnelLayer},
+    header::{IpTunnelLayer, LinkLayer, NetworkLayer, TransportLayer, TunnelLayer},
     icmp::IcmpHeader,
     icmp6::Icmp6Header,
     ipv4::Ipv4Header,
@@ -178,7 +178,7 @@ pub struct Packet<'a> {
     arp: Option<ArpHeaderFull<'a>>,
     network: Option<NetworkLayer<'a>>,
     transport: Option<TransportLayer<'a>>,
-    tunnel: SmallVec<[TunnelLayer<'a>; MAX_INLINE_TUNNELS]>,
+    tunnel: SmallVec<[IpTunnelLayer<'a>; MAX_INLINE_TUNNELS]>,
     data: &'a [u8],
 }
 
@@ -202,7 +202,10 @@ impl<'a> Packet<'a> {
         let mut arp: Option<ArpHeaderFull<'a>> = None;
         let mut network: Option<NetworkLayer<'a>> = None;
         let mut transport: Option<TransportLayer<'a>> = None;
-        let mut tunnel: SmallVec<[TunnelLayer<'a>; MAX_INLINE_TUNNELS]> = SmallVec::new();
+        let mut tunnel: SmallVec<[IpTunnelLayer<'a>; MAX_INLINE_TUNNELS]> = SmallVec::new();
+        
+        // Track outer IP for tunnel encapsulation
+        let mut outer_ip_for_tunnel: Option<NetworkLayer<'a>> = None;
 
         loop {
             match next_layer {
@@ -215,7 +218,8 @@ impl<'a> Packet<'a> {
                 NextLayer::Network(ether_proto) => {
                     match Self::parse_network(remaining, ether_proto)? {
                         NetworkResult::Network(net, next, rest) => {
-                            network = Some(net);
+                            network = Some(net.clone());
+                            outer_ip_for_tunnel = Some(net);
                             next_layer = next;
                             remaining = rest;
                         }
@@ -247,7 +251,10 @@ impl<'a> Packet<'a> {
                                 next_layer = NextLayer::Done;
                                 remaining = rest;
                             } else {
-                                tunnel.push(TunnelLayer::Ipip(tun));
+                                // IPIP tunnel already contains outer IP, wrap in IpTunnelLayer
+                                tunnel.push(IpTunnelLayer::new_l2(TunnelLayer::Ipip(tun)));
+                                // Reset outer IP since we consumed it
+                                outer_ip_for_tunnel = None;
                                 next_layer = next;
                                 remaining = rest;
                             }
@@ -286,6 +293,7 @@ impl<'a> Packet<'a> {
                             remaining = rest;
                         }
                         TransportResult::Tunnel(next, rest) => {
+                            // Keep outer_ip_for_tunnel for the upcoming tunnel parsing
                             next_layer = next;
                             remaining = rest;
                         }
@@ -297,7 +305,21 @@ impl<'a> Packet<'a> {
                 }
                 NextLayer::Tunnel(tunnel_type) => {
                     let (tun, next, rest) = Self::parse_tunnel(remaining, tunnel_type)?;
-                    tunnel.push(tun);
+                    
+                    // Wrap tunnel with outer IP (if available)
+                    let ip_tunnel = if let Some(outer) = outer_ip_for_tunnel.take() {
+                        IpTunnelLayer::new(outer, tun)
+                    } else {
+                        // Layer 2 tunnel (e.g., PBB) without IP encapsulation
+                        IpTunnelLayer::new_l2(tun)
+                    };
+                    
+                    tunnel.push(ip_tunnel);
+                    
+                    // If we're continuing to parse inner packet, reset network tracking
+                    network = None;
+                    transport = None;
+                    
                     next_layer = next;
                     remaining = rest;
                 }
@@ -677,9 +699,9 @@ impl<'a> Packet<'a> {
         self.transport.as_ref()
     }
 
-    /// Returns a slice of tunnel layer headers.
+    /// Returns a slice of IP tunnel layer headers.
     #[inline]
-    pub fn tunnels(&self) -> &[TunnelLayer<'a>] {
+    pub fn tunnels(&self) -> &[IpTunnelLayer<'a>] {
         &self.tunnel
     }
 
@@ -792,8 +814,13 @@ mod tests {
         assert_eq!(packet.tunnels().len(), 1, "Expected 1 tunnel, got {}", packet.tunnels().len());
 
         // The tunnel should be VXLAN
-        assert!(matches!(packet.tunnels()[0], TunnelLayer::Vxlan(_)),
-            "Expected VXLAN tunnel, got {:?}", packet.tunnels()[0]);
+        assert!(matches!(packet.tunnels()[0].tunnel(), TunnelLayer::Vxlan(_)),
+            "Expected VXLAN tunnel, got {:?}", packet.tunnels()[0].tunnel());
+        
+        // The outer IP should be present
+        assert!(packet.tunnels()[0].outer().is_some(), "Expected outer IP header");
+        assert!(matches!(packet.tunnels()[0].outer().unwrap(), NetworkLayer::Ipv4(_)),
+            "Expected outer IPv4");
 
         // Network should be the inner IPv4
         assert!(packet.network().is_some(), "Expected network layer");
@@ -811,5 +838,40 @@ mod tests {
 
         // Network should be the outer IPv4
         assert!(packet.network().is_some(), "Expected network layer");
+    }
+
+    #[test]
+    fn test_ip_tunnel_layer_structure() {
+        let packet_bytes = create_vxlan_packet();
+        let packet = Packet::from_bytes(&packet_bytes, LinkType::Ethernet, ParseMode::Innermost)
+            .expect("Should parse VXLAN packet");
+
+        // Verify IpTunnelLayer structure
+        assert_eq!(packet.tunnels().len(), 1);
+        let ip_tunnel = &packet.tunnels()[0];
+
+        // Check outer IP header exists and is IPv4
+        assert!(ip_tunnel.outer().is_some(), "Outer IP should be present for VXLAN");
+        match ip_tunnel.outer().unwrap() {
+            NetworkLayer::Ipv4(ipv4) => {
+                // Verify outer IPs match what we created
+                assert_eq!(ipv4.src_ip().to_string(), "10.0.0.1");
+                assert_eq!(ipv4.dst_ip().to_string(), "10.0.0.2");
+            }
+            _ => panic!("Expected IPv4 outer header"),
+        }
+
+        // Check tunnel layer is VXLAN
+        match ip_tunnel.tunnel() {
+            TunnelLayer::Vxlan(vxlan) => {
+                assert_eq!(vxlan.vni(), 100, "Expected VNI 100");
+            }
+            _ => panic!("Expected VXLAN tunnel"),
+        }
+
+        // Verify Display format includes both outer and tunnel
+        let display = format!("{}", ip_tunnel);
+        assert!(display.contains("IPv4"), "Display should show outer IPv4");
+        assert!(display.contains("VXLAN"), "Display should show VXLAN tunnel");
     }
 }

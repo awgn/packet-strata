@@ -40,7 +40,7 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crate::packet::ether::EtherHeaderVlan;
-use crate::packet::header::{LinkLayer, TunnelLayer};
+use crate::packet::header::{IpTunnelLayer, LinkLayer, NetworkLayer, TunnelLayer};
 use crate::packet::tunnel::ipip::OuterIpHeader;
 
 /// Error types for VNI operations
@@ -382,6 +382,144 @@ impl From<IpTunnel<'_>> for SmallVec<[VniLayer; 2]> {
             }
             TunnelLayer::Ipip(ipip) => {
                 // IPIP tunnels have access to outer IP headers
+                match ipip.outer_header() {
+                    crate::packet::tunnel::ipip::OuterIpHeader::V4(ipv4) => {
+                        let src = ipv4.header.src_ip_raw();
+                        let dst = ipv4.header.dst_ip_raw();
+                        let mut endpoints = [IpAddr::V4(Ipv4Addr::from(src)), IpAddr::V4(Ipv4Addr::from(dst))];
+                        endpoints.sort();
+
+                        match ipip.tunnel_type() {
+                            crate::packet::tunnel::ipip::IpipType::Ipip => {
+                                sv.push(VniLayer::Ipip { endpoints });
+                            }
+                            crate::packet::tunnel::ipip::IpipType::Sit => {
+                                sv.push(VniLayer::Sit { endpoints });
+                            }
+                            _ => {}
+                        }
+                    }
+                    crate::packet::tunnel::ipip::OuterIpHeader::V6(ipv6) => {
+                        let src = ipv6.header.src_ip_raw();
+                        let dst = ipv6.header.dst_ip_raw();
+                        let mut endpoints = [IpAddr::V6(Ipv6Addr::from(dst)), IpAddr::V6(Ipv6Addr::from(src))];
+                        endpoints.sort();
+
+                        match ipip.tunnel_type() {
+                            crate::packet::tunnel::ipip::IpipType::Ip4in6 => {
+                                sv.push(VniLayer::Ip4in6 { endpoints });
+                            }
+                            crate::packet::tunnel::ipip::IpipType::Ip6Tnl => {
+                                sv.push(VniLayer::Ip6Tnl { endpoints });
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        sv
+    }
+}
+
+impl From<&IpTunnelLayer<'_>> for SmallVec<[VniLayer; 2]> {
+    fn from(ip_tunnel: &IpTunnelLayer<'_>) -> Self {
+        let mut sv = SmallVec::<[VniLayer; 2]>::new();
+
+        // Extract endpoints from outer IP header if present
+        let endpoints: Option<[IpAddr; 2]> = ip_tunnel.outer().and_then(|outer| {
+            match outer {
+                NetworkLayer::Ipv4(ipv4) => {
+                    Some([ipv4.src_ip().into(), ipv4.dst_ip().into()])
+                }
+                NetworkLayer::Ipv6(ipv6) => {
+                    Some([ipv6.src_ip().into(), ipv6.dst_ip().into()])
+                }
+                NetworkLayer::Mpls(_) => None, // MPLS doesn't have IP endpoints
+            }
+        });
+
+        // Process the tunnel based on type
+        match ip_tunnel.tunnel() {
+            TunnelLayer::Vxlan(vxlan) => {
+                if let Some(endpoints) = endpoints {
+                    sv.push(VniLayer::Vxlan { vni: vxlan.vni(), group_id: 0, endpoints });
+                }
+            }
+            TunnelLayer::Geneve(geneve) => {
+                if let Some(endpoints) = endpoints {
+                    sv.push(VniLayer::Geneve { 
+                        vni: geneve.header.vni(), 
+                        protocol_type: geneve.header.protocol_type_raw(), 
+                        endpoints 
+                    });
+                }
+            }
+            TunnelLayer::Gre(gre) => {
+                if let Some(endpoints) = endpoints {
+                    sv.push(VniLayer::Gre { 
+                        protocol_type: gre.header.protocol_type().into(), 
+                        key: gre.key(), 
+                        endpoints 
+                    });
+                }
+            }
+            TunnelLayer::Teredo(_teredo) => {
+                if let Some(endpoints) = endpoints {
+                    sv.push(VniLayer::Teredo { endpoints });
+                }
+            }
+            TunnelLayer::Gtpv1(gtp) => {
+                if let Some(endpoints) = endpoints {
+                    sv.push(VniLayer::GtpU { teid: gtp.header.teid(), endpoints });
+                }
+            }
+            TunnelLayer::Gtpv2(_gtp) => {
+                // GTPv2 is control plane, not a tunnel for VNI purposes
+            }
+            TunnelLayer::L2tpv2(l2tp) => {
+                if let Some(endpoints) = endpoints {
+                    sv.push(VniLayer::L2tpV2 { 
+                        tunnel_id: l2tp.tunnel_id(), 
+                        session_id: l2tp.session_id(), 
+                        endpoints 
+                    });
+                }
+            }
+            TunnelLayer::L2tpv3(l2tp) => {
+                if let Some(endpoints) = endpoints {
+                    sv.push(VniLayer::L2tpV3 { session_id: l2tp.session_id(), endpoints });
+                }
+            }
+            TunnelLayer::Nvgre(nvgre) => {
+                if let Some(endpoints) = endpoints {
+                    sv.push(VniLayer::NvGre { 
+                        protocol_type: nvgre.protocol_type_raw(), 
+                        vsid_flowid: nvgre.vsid() << 8 | nvgre.flow_id() as u32, 
+                        endpoints 
+                    });
+                }
+            }
+            TunnelLayer::Pbb(pbb) => {
+                // PBB (Provider Backbone Bridge) is MAC-in-MAC, doesn't need IP endpoints
+                sv.push(VniLayer::Pbb {
+                    isid: pbb.isid(),
+                    bvid: pbb.bvid(),
+                });
+            }
+            TunnelLayer::Stt(stt) => {
+                if let Some(endpoints) = endpoints {
+                    sv.push(VniLayer::Stt { context_id: stt.context_id(), endpoints });
+                }
+            }
+            TunnelLayer::Pptp(pptp) => {
+                if let Some(endpoints) = endpoints {
+                    sv.push(VniLayer::Pptp { call_id: pptp.header.call_id(), endpoints });
+                }
+            }
+            TunnelLayer::Ipip(ipip) => {
+                // IPIP tunnels have access to outer IP headers embedded in the tunnel
                 match ipip.outer_header() {
                     crate::packet::tunnel::ipip::OuterIpHeader::V4(ipv4) => {
                         let src = ipv4.header.src_ip_raw();
@@ -1343,7 +1481,7 @@ mod tests {
         let flow_id: u8 = 0xAB;
         let combined = (vsid << 8) | flow_id as u32;
 
-        let nvgre = VniLayer::NvGre {
+        let _nvgre = VniLayer::NvGre {
             protocol_type: 0x6558,
             vsid_flowid: combined,
             endpoints,
