@@ -13,7 +13,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-smallvec.workspace = true
+smallvec = { workspace = true, features = ["const_new"] }
 smol_str.workspace = true
 thiserror.workspace = true
 zerocopy.workspace = true

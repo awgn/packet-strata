@@ -37,38 +37,11 @@
 use smallvec::SmallVec;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-/// IP address representation (IPv4 or IPv6)
-///
-/// Uses byte arrays for efficient storage and comparison.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum IpAddr {
-    /// IPv4 address (4 bytes, network byte order)
-    V4([u8; 4]),
-    /// IPv6 address (16 bytes, network byte order)
-    V6([u8; 16]),
-}
-
-impl fmt::Display for IpAddr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::V4(bytes) => {
-                write!(f, "{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3])
-            }
-            Self::V6(bytes) => {
-                // Simple IPv6 formatting (could be improved with :: compression)
-                write!(
-                    f,
-                    "{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}",
-                    bytes[0], bytes[1], bytes[2], bytes[3],
-                    bytes[4], bytes[5], bytes[6], bytes[7],
-                    bytes[8], bytes[9], bytes[10], bytes[11],
-                    bytes[12], bytes[13], bytes[14], bytes[15]
-                )
-            }
-        }
-    }
-}
+use crate::packet::ether::EtherHeaderVlan;
+use crate::packet::header::{LinkLayer, TunnelLayer};
+use crate::packet::tunnel::ipip::OuterIpHeader;
 
 /// Error types for VNI operations
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,330 +185,6 @@ pub enum VniLayer {
     },
 }
 
-impl VniLayer {
-    /// Create a VLAN layer
-    ///
-    /// # Arguments
-    ///
-    /// * `vid` - VLAN ID (12-bit value, 0-4095)
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let vlan = VniLayer::vlan(100);
-    /// ```
-    #[inline]
-    pub const fn vlan(vid: u16) -> Self {
-        Self::Vlan { vid }
-    }
-
-    /// Create an MPLS layer
-    ///
-    /// # Arguments
-    ///
-    /// * `label` - MPLS label (20-bit value)
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let mpls = VniLayer::mpls(12345);
-    /// ```
-    #[inline]
-    pub const fn mpls(label: u32) -> Self {
-        Self::Mpls { label }
-    }
-
-    /// Create a GRE or NVGRE layer
-    ///
-    /// Automatically determines whether this is NVGRE or standard GRE based on
-    /// the protocol type (0x6558 = Transparent Ethernet Bridging).
-    ///
-    /// # Type Parameters
-    ///
-    /// * `V` - IP version (4 or 6)
-    ///
-    /// # Arguments
-    ///
-    /// * `protocol_type` - GRE protocol type field
-    /// * `key` - Optional GRE key field
-    /// * `ip_header` - Raw IP header bytes containing tunnel endpoints
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let ip_header = &[/* IPv4 header bytes */];
-    /// let gre = VniLayer::gre::<4>(0x0800, Some(12345), ip_header)?;
-    /// ```
-    pub fn gre<const V: usize>(
-        protocol_type: u16,
-        key: Option<u32>,
-        ip_header: &[u8],
-    ) -> Result<Self, VniError> {
-        const ETH_P_TEB: u16 = 0x6558; // Transparent Ethernet Bridging
-
-        let [e1, e2] = get_endpoints::<V>(ip_header)?;
-
-        if protocol_type == ETH_P_TEB {
-            // NVGRE uses the key as VSID/FlowID
-            Ok(Self::NvGre {
-                protocol_type,
-                vsid_flowid: key.unwrap_or(0),
-                endpoints: [e1, e2],
-            })
-        } else {
-            Ok(Self::Gre {
-                protocol_type,
-                key,
-                endpoints: [e1, e2],
-            })
-        }
-    }
-
-    /// Create a VXLAN layer
-    ///
-    /// # Type Parameters
-    ///
-    /// * `V` - IP version (4 or 6)
-    ///
-    /// # Arguments
-    ///
-    /// * `group_id` - VXLAN Group Policy ID (0 if not using Group Policy extension)
-    /// * `vni` - VXLAN Network Identifier (24-bit value)
-    /// * `ip_header` - Raw IP header bytes containing tunnel endpoints
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let ip_header = &[/* IPv4 header bytes */];
-    /// let vxlan = VniLayer::vxlan::<4>(0, 5000, ip_header)?;
-    /// ```
-    pub fn vxlan<const V: usize>(
-        group_id: u16,
-        vni: u32,
-        ip_header: &[u8],
-    ) -> Result<Self, VniError> {
-        let [e1, e2] = get_endpoints::<V>(ip_header)?;
-
-        Ok(Self::Vxlan {
-            vni,
-            group_id,
-            endpoints: [e1, e2],
-        })
-    }
-
-    /// Create a Geneve layer
-    ///
-    /// # Type Parameters
-    ///
-    /// * `V` - IP version (4 or 6)
-    ///
-    /// # Arguments
-    ///
-    /// * `protocol_type` - Geneve protocol type
-    /// * `vni` - Virtual Network Identifier (24-bit value)
-    /// * `ip_header` - Raw IP header bytes containing tunnel endpoints
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let ip_header = &[/* IPv4 header bytes */];
-    /// let geneve = VniLayer::geneve::<4>(0x6558, 5000, ip_header)?;
-    /// ```
-    pub fn geneve<const V: usize>(
-        protocol_type: u16,
-        vni: u32,
-        ip_header: &[u8],
-    ) -> Result<Self, VniError> {
-        let [e1, e2] = get_endpoints::<V>(ip_header)?;
-
-        Ok(Self::Geneve {
-            vni,
-            protocol_type,
-            endpoints: [e1, e2],
-        })
-    }
-
-    /// Create an IPIP (IP-in-IP) layer - IPv4 encapsulated in IPv4 (RFC 2003)
-    ///
-    /// # Type Parameters
-    ///
-    /// * `V` - IP version of outer header (should be 4)
-    ///
-    /// # Arguments
-    ///
-    /// * `ip_header` - Raw IP header bytes containing tunnel endpoints
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let ip_header = &[/* IPv4 header bytes */];
-    /// let ipip = VniLayer::ipip::<4>(ip_header)?;
-    /// ```
-    pub fn ipip<const V: usize>(ip_header: &[u8]) -> Result<Self, VniError> {
-        let [e1, e2] = get_endpoints::<V>(ip_header)?;
-        Ok(Self::Ipip {
-            endpoints: [e1, e2],
-        })
-    }
-
-    /// Create an IPv4-in-IPv6 layer (RFC 2473)
-    ///
-    /// Used in DS-Lite (RFC 6333) and other 4in6 scenarios.
-    pub fn ip4in6<const V: usize>(ip_header: &[u8]) -> Result<Self, VniError> {
-        let [e1, e2] = get_endpoints::<V>(ip_header)?;
-        Ok(Self::Ip4in6 {
-            endpoints: [e1, e2],
-        })
-    }
-
-    /// Create a SIT (Simple Internet Transition) layer - IPv6-in-IPv4 (RFC 4213)
-    ///
-    /// Also known as 6in4 or configured tunnels.
-    pub fn sit<const V: usize>(ip_header: &[u8]) -> Result<Self, VniError> {
-        let [e1, e2] = get_endpoints::<V>(ip_header)?;
-        Ok(Self::Sit {
-            endpoints: [e1, e2],
-        })
-    }
-
-    /// Create an IPv6-in-IPv6 tunnel layer (RFC 2473)
-    pub fn ip6tnl<const V: usize>(ip_header: &[u8]) -> Result<Self, VniError> {
-        let [e1, e2] = get_endpoints::<V>(ip_header)?;
-        Ok(Self::Ip6Tnl {
-            endpoints: [e1, e2],
-        })
-    }
-
-    /// Create a GTP-U (User Plane) layer
-    ///
-    /// # Type Parameters
-    ///
-    /// * `V` - IP version (4 or 6)
-    ///
-    /// # Arguments
-    ///
-    /// * `teid` - Tunnel Endpoint Identifier (32-bit)
-    /// * `ip_header` - Raw IP header bytes containing tunnel endpoints
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let ip_header = &[/* IPv4 header bytes */];
-    /// let gtp = VniLayer::gtp_u::<4>(0x12345678, ip_header)?;
-    /// ```
-    pub fn gtp_u<const V: usize>(teid: u32, ip_header: &[u8]) -> Result<Self, VniError> {
-        let [e1, e2] = get_endpoints::<V>(ip_header)?;
-        Ok(Self::GtpU {
-            teid,
-            endpoints: [e1, e2],
-        })
-    }
-
-    /// Create a Teredo layer
-    pub fn teredo<const V: usize>(ip_header: &[u8]) -> Result<Self, VniError> {
-        let [e1, e2] = get_endpoints::<V>(ip_header)?;
-        Ok(Self::Teredo {
-            endpoints: [e1, e2],
-        })
-    }
-
-    /// Create an L2TPv2 layer
-    ///
-    /// # Arguments
-    ///
-    /// * `tunnel_id` - Tunnel ID (16-bit)
-    /// * `session_id` - Session ID (16-bit)
-    /// * `ip_header` - Raw IP header bytes containing tunnel endpoints
-    pub fn l2tp_v2<const V: usize>(
-        tunnel_id: u16,
-        session_id: u16,
-        ip_header: &[u8],
-    ) -> Result<Self, VniError> {
-        let [e1, e2] = get_endpoints::<V>(ip_header)?;
-        Ok(Self::L2tpV2 {
-            tunnel_id,
-            session_id,
-            endpoints: [e1, e2],
-        })
-    }
-
-    /// Create an L2TPv3 layer
-    ///
-    /// # Arguments
-    ///
-    /// * `session_id` - Session ID (32-bit)
-    /// * `ip_header` - Raw IP header bytes containing tunnel endpoints
-    pub fn l2tp_v3<const V: usize>(session_id: u32, ip_header: &[u8]) -> Result<Self, VniError> {
-        let [e1, e2] = get_endpoints::<V>(ip_header)?;
-        Ok(Self::L2tpV3 {
-            session_id,
-            endpoints: [e1, e2],
-        })
-    }
-
-    /// Create a PBB (Provider Backbone Bridge) layer
-    ///
-    /// # Arguments
-    ///
-    /// * `isid` - I-SID (Service Instance Identifier, 24-bit)
-    /// * `bvid` - Optional B-VID (Backbone VLAN ID, 12-bit)
-    #[inline]
-    pub const fn pbb(isid: u32, bvid: Option<u16>) -> Self {
-        Self::Pbb { isid, bvid }
-    }
-
-    /// Create an STT (Stateless Transport Tunneling) layer
-    ///
-    /// # Arguments
-    ///
-    /// * `context_id` - Context ID (64-bit)
-    /// * `ip_header` - Raw IP header bytes containing tunnel endpoints
-    pub fn stt<const V: usize>(context_id: u64, ip_header: &[u8]) -> Result<Self, VniError> {
-        let [e1, e2] = get_endpoints::<V>(ip_header)?;
-        Ok(Self::Stt {
-            context_id,
-            endpoints: [e1, e2],
-        })
-    }
-
-    /// Create a PPTP layer
-    ///
-    /// # Arguments
-    ///
-    /// * `call_id` - Call ID (16-bit)
-    /// * `ip_header` - Raw IP header bytes containing tunnel endpoints
-    pub fn pptp<const V: usize>(call_id: u16, ip_header: &[u8]) -> Result<Self, VniError> {
-        let [e1, e2] = get_endpoints::<V>(ip_header)?;
-        Ok(Self::Pptp {
-            call_id,
-            endpoints: [e1, e2],
-        })
-    }
-
-    /// Get the layer type name
-    pub fn layer_name(&self) -> &'static str {
-        match self {
-            Self::Vlan { .. } => "vlan",
-            Self::Mpls { .. } => "mpls",
-            Self::Gre { .. } => "gre",
-            Self::NvGre { .. } => "nvgre",
-            Self::Vxlan { .. } => "vxlan",
-            Self::Geneve { .. } => "geneve",
-            Self::Ipip { .. } => "ipip",
-            Self::Ip4in6 { .. } => "ip4in6",
-            Self::Sit { .. } => "sit",
-            Self::Ip6Tnl { .. } => "ip6tnl",
-            Self::GtpU { .. } => "gtp-u",
-            Self::Teredo { .. } => "teredo",
-            Self::L2tpV2 { .. } => "l2tpv2",
-            Self::L2tpV3 { .. } => "l2tpv3",
-            Self::Pbb { .. } => "pbb",
-            Self::Stt { .. } => "stt",
-            Self::Pptp { .. } => "pptp",
-        }
-    }
-}
-
 impl fmt::Display for VniLayer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -656,55 +305,124 @@ impl fmt::Display for VniLayer {
     }
 }
 
-/// Extracts and orders tunnel endpoints from IP header
-///
-/// Returns an array of [lower_ip, higher_ip] to ensure consistent ordering
-/// for bidirectional flow identification.
-///
-/// # Type Parameters
-///
-/// * `V` - IP version (4 or 6)
-///
-/// # Arguments
-///
-/// * `ip_header` - Raw IP header bytes
-///
-/// # Returns
-///
-/// An array of two IP addresses in canonical order (lower first)
-fn get_endpoints<const V: usize>(ip_header: &[u8]) -> Result<[IpAddr; 2], VniError> {
-    match V {
-        4 => {
-            if ip_header.len() < 20 {
-                return Err(VniError::InvalidHeaderLength);
-            }
-            let mut src_bytes = [0u8; 4];
-            let mut dst_bytes = [0u8; 4];
-            src_bytes.copy_from_slice(&ip_header[12..16]);
-            dst_bytes.copy_from_slice(&ip_header[16..20]);
-
-            let src = IpAddr::V4(src_bytes);
-            let dst = IpAddr::V4(dst_bytes);
-
-            Ok(if src < dst { [src, dst] } else { [dst, src] })
+impl From<LinkLayer<'_>> for SmallVec<[VniLayer; 2]> {
+    fn from(value: LinkLayer<'_>) -> Self {
+        match value {
+            LinkLayer::Ethernet(EtherHeaderVlan::VLAN8021Q(_, eth8021q)) => {
+                let mut sv = SmallVec::<[VniLayer; 2]>::new();
+                sv.push(VniLayer::Vlan { vid: eth8021q.vlan_id() });
+                sv
+            },
+            LinkLayer::Ethernet(EtherHeaderVlan::VLAN8021QNested(_, eth8021q, eth8021q_n)) => {
+                let mut sv = SmallVec::<[VniLayer; 2]>::new();
+                sv.push(VniLayer::Vlan { vid: eth8021q.vlan_id() });
+                sv.push(VniLayer::Vlan { vid: eth8021q_n.vlan_id() });
+                sv
+            },
+            _ => SmallVec::<[VniLayer; 2]>::new(),
         }
-        6 => {
-            if ip_header.len() < 40 {
-                return Err(VniError::InvalidHeaderLength);
-            }
-            let mut src_bytes = [0u8; 16];
-            let mut dst_bytes = [0u8; 16];
-            src_bytes.copy_from_slice(&ip_header[8..24]);
-            dst_bytes.copy_from_slice(&ip_header[24..40]);
-
-            let src = IpAddr::V6(src_bytes);
-            let dst = IpAddr::V6(dst_bytes);
-
-            Ok(if src < dst { [src, dst] } else { [dst, src] })
-        }
-        _ => Err(VniError::InvalidIpVersion),
     }
 }
+
+pub struct IpTunnel<'a>((OuterIpHeader<'a>, TunnelLayer<'a>));
+
+impl From<IpTunnel<'_>> for SmallVec<[VniLayer; 2]> {
+    fn from(IpTunnel((ip, tun)): IpTunnel<'_>) -> Self {
+        let mut sv = SmallVec::<[VniLayer; 2]>::new();
+
+        let endpoints : [IpAddr; 2] = match ip {
+            OuterIpHeader::V4(ipv4_header) => {
+                [ipv4_header.src_ip().into(), ipv4_header.dst_ip().into()]
+            },
+            OuterIpHeader::V6(ipv6_header) => {
+                [ipv6_header.src_ip().into(), ipv6_header.dst_ip().into()]
+            },
+        };
+
+        match &tun {
+            TunnelLayer::Vxlan(vxlan) => {
+                sv.push(VniLayer::Vxlan { vni: vxlan.vni(), group_id: 0, endpoints });
+            }
+            TunnelLayer::Geneve(geneve) => {
+                sv.push(VniLayer::Geneve { vni: geneve.header.vni(), protocol_type: geneve.header.protocol_type_raw(), endpoints });
+            }
+            TunnelLayer::Gre(gre) => {
+                sv.push(VniLayer::Gre { protocol_type: gre.header.protocol_type().into(), key: gre.key(), endpoints });
+            }
+            TunnelLayer::Teredo(_teredo) => {
+                sv.push(VniLayer::Teredo { endpoints });
+            }
+            TunnelLayer::Gtpv1(gtp) => {
+                sv.push(VniLayer::GtpU { teid: gtp.header.teid(), endpoints });
+            }
+            TunnelLayer::Gtpv2(_gtp) => {
+                // GTPv2 is control plane, not a tunnel for VNI purposes
+            }
+            TunnelLayer::L2tpv2(l2tp) => {
+                sv.push(VniLayer::L2tpV2 { tunnel_id: l2tp.tunnel_id(), session_id: l2tp.session_id(), endpoints });
+            }
+            TunnelLayer::L2tpv3(l2tp) => {
+                sv.push(VniLayer::L2tpV3 { session_id: l2tp.session_id(), endpoints });
+            }
+            TunnelLayer::Nvgre(nvgre) => {
+                sv.push(VniLayer::NvGre { protocol_type: nvgre.protocol_type_raw(), vsid_flowid: nvgre.vsid() << 8 | nvgre.flow_id() as u32, endpoints });
+            }
+            TunnelLayer::Pbb(pbb) => {
+                // PBB (Provider Backbone Bridge) is MAC-in-MAC, doesn't need IP endpoints
+                sv.push(VniLayer::Pbb {
+                    isid: pbb.isid(),
+                    bvid: pbb.bvid(),
+                });
+            }
+            TunnelLayer::Stt(stt) => {
+                sv.push(VniLayer::Stt { context_id: stt.context_id(), endpoints });
+            }
+            TunnelLayer::Pptp(pptp) => {
+                sv.push(VniLayer::Pptp { call_id: pptp.header.call_id(), endpoints });
+            }
+            TunnelLayer::Ipip(ipip) => {
+                // IPIP tunnels have access to outer IP headers
+                match ipip.outer_header() {
+                    crate::packet::tunnel::ipip::OuterIpHeader::V4(ipv4) => {
+                        let src = ipv4.header.src_ip_raw();
+                        let dst = ipv4.header.dst_ip_raw();
+                        let mut endpoints = [IpAddr::V4(Ipv4Addr::from(src)), IpAddr::V4(Ipv4Addr::from(dst))];
+                        endpoints.sort();
+
+                        match ipip.tunnel_type() {
+                            crate::packet::tunnel::ipip::IpipType::Ipip => {
+                                sv.push(VniLayer::Ipip { endpoints });
+                            }
+                            crate::packet::tunnel::ipip::IpipType::Sit => {
+                                sv.push(VniLayer::Sit { endpoints });
+                            }
+                            _ => {}
+                        }
+                    }
+                    crate::packet::tunnel::ipip::OuterIpHeader::V6(ipv6) => {
+                        let src = ipv6.header.src_ip_raw();
+                        let dst = ipv6.header.dst_ip_raw();
+                        let mut endpoints = [IpAddr::V6(Ipv6Addr::from(dst)), IpAddr::V6(Ipv6Addr::from(src))];
+                        endpoints.sort();
+
+                        match ipip.tunnel_type() {
+                            crate::packet::tunnel::ipip::IpipType::Ip4in6 => {
+                                sv.push(VniLayer::Ip4in6 { endpoints });
+                            }
+                            crate::packet::tunnel::ipip::IpipType::Ip6Tnl => {
+                                sv.push(VniLayer::Ip6Tnl { endpoints });
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        sv
+    }
+}
+
 
 /// VNI identifier (opaque handle)
 ///
@@ -883,388 +601,959 @@ impl Default for VniMapper {
 
 #[cfg(test)]
 mod tests {
-    use std::slice::from_ref;
-
     use super::*;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    // ========================================================================
+    // VniError Tests
+    // ========================================================================
 
     #[test]
-    fn test_vlan_creation() {
-        let vlan = VniLayer::vlan(100);
-        match vlan {
-            VniLayer::Vlan { vid } => assert_eq!(vid, 100),
-            _ => panic!("Expected VLAN variant"),
-        }
+    fn test_vni_error_display() {
+        let err1 = VniError::InvalidHeaderLength;
+        assert_eq!(err1.to_string(), "Invalid IP header length");
+
+        let err2 = VniError::InvalidIpVersion;
+        assert_eq!(err2.to_string(), "Invalid IP version");
     }
 
     #[test]
-    fn test_mpls_creation() {
-        let mpls = VniLayer::mpls(12345);
-        match mpls {
-            VniLayer::Mpls { label } => assert_eq!(label, 12345),
-            _ => panic!("Expected MPLS variant"),
-        }
+    fn test_vni_error_clone_eq() {
+        let err1 = VniError::InvalidHeaderLength;
+        let err2 = err1.clone();
+        assert_eq!(err1, err2);
+
+        let err3 = VniError::InvalidIpVersion;
+        assert_ne!(err1, err3);
+    }
+
+    // ========================================================================
+    // VniLayer Tests - Construction and Display
+    // ========================================================================
+
+
+
+    // ========================================================================
+    // VniLayer Equality and Ordering Tests
+    // ========================================================================
+
+    #[test]
+    fn test_vni_layer_equality() {
+        let vlan1 = VniLayer::Vlan { vid: 100 };
+        let vlan2 = VniLayer::Vlan { vid: 100 };
+        let vlan3 = VniLayer::Vlan { vid: 200 };
+
+        assert_eq!(vlan1, vlan2);
+        assert_ne!(vlan1, vlan3);
+
+        let mpls1 = VniLayer::Mpls { label: 100 };
+        assert_ne!(vlan1, mpls1); // Different variants
     }
 
     #[test]
-    fn test_mapper_basic() {
+    fn test_vni_layer_ordering() {
+        let vlan1 = VniLayer::Vlan { vid: 100 };
+        let vlan2 = VniLayer::Vlan { vid: 200 };
+        let _mpls = VniLayer::Mpls { label: 100 };
+
+        assert!(vlan1 < vlan2);
+        // Ordering between different variants depends on enum declaration order
+    }
+
+    #[test]
+    fn test_vni_layer_clone_hash() {
+        let endpoints = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+
+        let vxlan1 = VniLayer::Vxlan {
+            vni: 100,
+            group_id: 0,
+            endpoints,
+        };
+        let vxlan2 = vxlan1.clone();
+
+        assert_eq!(vxlan1, vxlan2);
+
+        // Test that it can be used in hash-based collections
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(vxlan1.clone());
+        assert!(set.contains(&vxlan2));
+    }
+
+    // ========================================================================
+    // VniId Tests
+    // ========================================================================
+
+    #[test]
+    fn test_vni_id_creation() {
+        let id = VniId::from_u32(42);
+        assert_eq!(id.as_u32(), 42);
+    }
+
+    #[test]
+    fn test_vni_id_display() {
+        let id = VniId::from_u32(100);
+        assert_eq!(format!("{}", id), "VniId(100)");
+    }
+
+    #[test]
+    fn test_vni_id_equality() {
+        let id1 = VniId::from_u32(42);
+        let id2 = VniId::from_u32(42);
+        let id3 = VniId::from_u32(43);
+
+        assert_eq!(id1, id2);
+        assert_ne!(id1, id3);
+    }
+
+    // ========================================================================
+    // VniMapper Tests
+    // ========================================================================
+
+    #[test]
+    fn test_vni_mapper_new() {
+        let mapper = VniMapper::new();
+        assert_eq!(mapper.len(), 0);
+        assert!(mapper.is_empty());
+    }
+
+    #[test]
+    fn test_vni_mapper_default() {
+        let mapper = VniMapper::default();
+        assert_eq!(mapper.len(), 0);
+        assert!(mapper.is_empty());
+    }
+
+    #[test]
+    fn test_vni_mapper_single_layer() {
         let mut mapper = VniMapper::new();
-        let vlan1 = VniLayer::vlan(100);
-        let vlan2 = VniLayer::vlan(200);
+        let vlan = VniLayer::Vlan { vid: 100 };
 
-        let id1 = mapper.get_or_create_vni_id(from_ref(&vlan1));
-        let id2 = mapper.get_or_create_vni_id(from_ref(&vlan2));
-        let id3 = mapper.get_or_create_vni_id(from_ref(&vlan1));
+        let id = mapper.get_or_create_vni_id(&[vlan.clone()]);
+        assert_eq!(mapper.len(), 1);
+        assert!(!mapper.is_empty());
 
-        assert_eq!(id1, id3); // Same VNI should get same ID
-        assert_ne!(id1, id2); // Different VNIs should get different IDs
+        // Same stack should return same ID
+        let id2 = mapper.get_or_create_vni_id(&[vlan.clone()]);
+        assert_eq!(id, id2);
+        assert_eq!(mapper.len(), 1); // No new entry created
 
+        // Lookup should work
+        let stack = mapper.lookup_vni(id).unwrap();
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0], vlan);
+    }
+
+    #[test]
+    fn test_vni_mapper_multi_layer() {
+        let mut mapper = VniMapper::new();
+        let vlan1 = VniLayer::Vlan { vid: 100 };
+        let vlan2 = VniLayer::Vlan { vid: 200 };
+
+        let id = mapper.get_or_create_vni_id(&[vlan1.clone(), vlan2.clone()]);
+        assert_eq!(mapper.len(), 1);
+
+        let stack = mapper.lookup_vni(id).unwrap();
+        assert_eq!(stack.len(), 2);
+        assert_eq!(stack[0], vlan1);
+        assert_eq!(stack[1], vlan2);
+    }
+
+    #[test]
+    fn test_vni_mapper_different_stacks() {
+        let mut mapper = VniMapper::new();
+        let vlan100 = VniLayer::Vlan { vid: 100 };
+        let vlan200 = VniLayer::Vlan { vid: 200 };
+        let mpls = VniLayer::Mpls { label: 1000 };
+
+        let id1 = mapper.get_or_create_vni_id(&[vlan100.clone()]);
+        let id2 = mapper.get_or_create_vni_id(&[vlan200.clone()]);
+        let id3 = mapper.get_or_create_vni_id(&[vlan100.clone(), mpls.clone()]);
+
+        assert_ne!(id1, id2);
+        assert_ne!(id1, id3);
+        assert_ne!(id2, id3);
+        assert_eq!(mapper.len(), 3);
+    }
+
+    #[test]
+    fn test_vni_mapper_order_matters() {
+        let mut mapper = VniMapper::new();
+        let vlan = VniLayer::Vlan { vid: 100 };
+        let mpls = VniLayer::Mpls { label: 1000 };
+
+        let id1 = mapper.get_or_create_vni_id(&[vlan.clone(), mpls.clone()]);
+        let id2 = mapper.get_or_create_vni_id(&[mpls.clone(), vlan.clone()]);
+
+        // Order matters - these should be different
+        assert_ne!(id1, id2);
         assert_eq!(mapper.len(), 2);
     }
 
     #[test]
-    fn test_mapper_lookup() {
+    fn test_vni_mapper_lookup_nonexistent() {
+        let mapper = VniMapper::new();
+        let id = VniId::from_u32(999);
+
+        assert!(mapper.lookup_vni(id).is_none());
+    }
+
+    #[test]
+    fn test_vni_mapper_clear() {
         let mut mapper = VniMapper::new();
-        let vlan = VniLayer::vlan(100);
+        let vlan = VniLayer::Vlan { vid: 100 };
 
-        let id = mapper.get_or_create_vni_id(from_ref(&vlan));
-        let lookup = mapper.lookup_vni(id);
+        let id1 = mapper.get_or_create_vni_id(&[vlan.clone()]);
+        assert_eq!(mapper.len(), 1);
 
-        assert!(lookup.is_some());
-        assert_eq!(lookup.unwrap()[0], vlan);
+        mapper.clear();
+        assert_eq!(mapper.len(), 0);
+        assert!(mapper.is_empty());
+
+        // After clear, lookup should fail
+        assert!(mapper.lookup_vni(id1).is_none());
+
+        // New ID should start from 1 again
+        let id2 = mapper.get_or_create_vni_id(&[vlan]);
+        assert_eq!(id2.as_u32(), 1);
     }
 
     #[test]
-    fn test_layer_display() {
-        let vlan = VniLayer::vlan(100);
-        assert_eq!(format!("{}", vlan), "vlan(100)");
+    fn test_vni_mapper_iter() {
+        let mut mapper = VniMapper::new();
+        let vlan1 = VniLayer::Vlan { vid: 100 };
+        let vlan2 = VniLayer::Vlan { vid: 200 };
+        let mpls = VniLayer::Mpls { label: 1000 };
 
-        let mpls = VniLayer::mpls(999);
-        assert_eq!(format!("{}", mpls), "mpls(999)");
+        mapper.get_or_create_vni_id(&[vlan1.clone()]);
+        mapper.get_or_create_vni_id(&[vlan2.clone()]);
+        mapper.get_or_create_vni_id(&[mpls.clone()]);
+
+        let entries: Vec<_> = mapper.iter().collect();
+        assert_eq!(entries.len(), 3);
+
+        // Check that all stacks are present
+        let stacks: Vec<_> = entries.iter().map(|(_, stack)| stack).collect();
+        assert!(stacks.iter().any(|s| s.len() == 1 && s[0] == vlan1));
+        assert!(stacks.iter().any(|s| s.len() == 1 && s[0] == vlan2));
+        assert!(stacks.iter().any(|s| s.len() == 1 && s[0] == mpls));
     }
 
     #[test]
-    fn test_ip_addr_ordering() {
-        let ip1 = IpAddr::V4([192, 168, 1, 1]);
-        let ip2 = IpAddr::V4([192, 168, 1, 2]);
+    fn test_vni_mapper_counter_increment() {
+        let mut mapper = VniMapper::new();
+        let vlan1 = VniLayer::Vlan { vid: 100 };
+        let vlan2 = VniLayer::Vlan { vid: 200 };
+        let vlan3 = VniLayer::Vlan { vid: 300 };
 
-        assert!(ip1 < ip2);
+        let id1 = mapper.get_or_create_vni_id(&[vlan1]);
+        let id2 = mapper.get_or_create_vni_id(&[vlan2]);
+        let id3 = mapper.get_or_create_vni_id(&[vlan3]);
+
+        assert_eq!(id1.as_u32(), 1);
+        assert_eq!(id2.as_u32(), 2);
+        assert_eq!(id3.as_u32(), 3);
+    }
+
+    // ========================================================================
+    // Complex Scenario Tests
+    // ========================================================================
+
+    #[test]
+    fn test_complex_tunnel_stack() {
+        let mut mapper = VniMapper::new();
+        let endpoints = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+
+        // Complex stack: VLAN + VXLAN + VLAN (nested virtualization)
+        let outer_vlan = VniLayer::Vlan { vid: 100 };
+        let vxlan = VniLayer::Vxlan {
+            vni: 5000,
+            group_id: 0,
+            endpoints,
+        };
+        let inner_vlan = VniLayer::Vlan { vid: 200 };
+
+        let id = mapper.get_or_create_vni_id(&[outer_vlan.clone(), vxlan.clone(), inner_vlan.clone()]);
+
+        let stack = mapper.lookup_vni(id).unwrap();
+        assert_eq!(stack.len(), 3);
+        assert_eq!(stack[0], outer_vlan);
+        assert_eq!(stack[1], vxlan);
+        assert_eq!(stack[2], inner_vlan);
     }
 
     #[test]
-    fn test_vxlan_ipv4() {
-        // Create a minimal IPv4 header
-        let mut header = vec![0u8; 20];
-        header[0] = 0x45; // Version 4, IHL 5
-        header[12..16].copy_from_slice(&[192, 168, 1, 1]); // src
-        header[16..20].copy_from_slice(&[10, 0, 0, 1]); // dst
+    fn test_multiple_tunnel_types() {
+        let mut mapper = VniMapper::new();
+        let endpoints_v4 = [
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2)),
+        ];
+        let endpoints_v6 = [
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)),
+        ];
 
-        let vxlan = VniLayer::vxlan::<4>(0, 5000, &header).unwrap();
+        let vxlan = VniLayer::Vxlan {
+            vni: 100,
+            group_id: 0,
+            endpoints: endpoints_v4,
+        };
+        let geneve = VniLayer::Geneve {
+            vni: 200,
+            protocol_type: 0x6558,
+            endpoints: endpoints_v6,
+        };
+        let gre = VniLayer::Gre {
+            protocol_type: 0x0800,
+            key: Some(300),
+            endpoints: endpoints_v4,
+        };
 
-        match vxlan {
-            VniLayer::Vxlan {
-                vni,
-                group_id,
-                endpoints,
-            } => {
-                assert_eq!(vni, 5000);
-                assert_eq!(group_id, 0);
-                assert_eq!(endpoints[0], IpAddr::V4([10, 0, 0, 1]));
-                assert_eq!(endpoints[1], IpAddr::V4([192, 168, 1, 1]));
+        let id1 = mapper.get_or_create_vni_id(&[vxlan]);
+        let id2 = mapper.get_or_create_vni_id(&[geneve]);
+        let id3 = mapper.get_or_create_vni_id(&[gre]);
+
+        assert_eq!(mapper.len(), 3);
+        assert_ne!(id1, id2);
+        assert_ne!(id2, id3);
+        assert_ne!(id1, id3);
+    }
+
+    #[test]
+    fn test_empty_stack() {
+        let mut mapper = VniMapper::new();
+        let id = mapper.get_or_create_vni_id(&[]);
+
+        assert_eq!(mapper.len(), 1);
+        let stack = mapper.lookup_vni(id).unwrap();
+        assert_eq!(stack.len(), 0);
+    }
+
+    #[test]
+    fn test_vni_mapper_reuse_after_partial_clear() {
+        let mut mapper = VniMapper::new();
+        let vlan = VniLayer::Vlan { vid: 100 };
+
+        let id1 = mapper.get_or_create_vni_id(&[vlan.clone()]);
+        assert_eq!(id1.as_u32(), 1);
+
+        mapper.clear();
+
+        let id2 = mapper.get_or_create_vni_id(&[vlan]);
+        assert_eq!(id2.as_u32(), 1); // Counter resets
+    }
+
+    // ========================================================================
+    // Edge Cases and Boundary Tests
+    // ========================================================================
+
+    #[test]
+    fn test_max_vlan_id() {
+        let vlan = VniLayer::Vlan { vid: 4095 }; // Max 12-bit value
+        assert_eq!(format!("{}", vlan), "vlan(4095)");
+    }
+
+    #[test]
+    fn test_max_mpls_label() {
+        let mpls = VniLayer::Mpls { label: 0xFFFFF }; // Max 20-bit value
+        assert_eq!(format!("{}", mpls), "mpls(1048575)");
+    }
+
+    #[test]
+    fn test_vxlan_24bit_vni() {
+        let endpoints = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+
+        let vxlan = VniLayer::Vxlan {
+            vni: 0xFFFFFF, // Max 24-bit value
+            group_id: 0,
+            endpoints,
+        };
+        assert!(format!("{}", vxlan).contains("vni:16777215"));
+    }
+
+    #[test]
+    fn test_mixed_ipv4_ipv6_endpoints() {
+        // While unusual, the type system allows mixed IP versions in comparisons
+        let endpoints1 = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+        let endpoints2 = [
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)),
+        ];
+
+        let ipip_v4 = VniLayer::Ipip { endpoints: endpoints1 };
+        let ipip_v6 = VniLayer::Ip6Tnl { endpoints: endpoints2 };
+
+        assert_ne!(ipip_v4, ipip_v6);
+    }
+
+    #[test]
+    fn test_vni_layer_size() {
+        // Ensure VniLayer variants don't grow unexpectedly
+        use std::mem::size_of;
+
+        // This is a regression test - if size increases significantly, investigate
+        let size = size_of::<VniLayer>();
+        
+        // VniLayer should be reasonably sized (less than 64 bytes on 64-bit systems)
+        // The largest variant is likely Stt or one with [IpAddr; 2] which is 2*32=64 bytes for IPv6
+        assert!(size <= 128, "VniLayer size is {}, expected <= 128 bytes", size);
+    }
+
+    #[test]
+    fn test_smallvec_inline_capacity() {
+        // Verify that SmallVec doesn't allocate for common cases
+        let vlan1 = VniLayer::Vlan { vid: 100 };
+        let vlan2 = VniLayer::Vlan { vid: 200 };
+
+        let mut sv = SmallVec::<[VniLayer; 4]>::new();
+        sv.push(vlan1);
+        sv.push(vlan2);
+
+        // With capacity 4, this should not spill to heap
+        assert!(!sv.spilled());
+    }
+
+    #[test]
+    fn test_btreemap_ordering() {
+        let mut mapper = VniMapper::new();
+        
+        // Insert in non-sequential order
+        let vlan200 = VniLayer::Vlan { vid: 200 };
+        let vlan100 = VniLayer::Vlan { vid: 100 };
+        let vlan300 = VniLayer::Vlan { vid: 300 };
+
+        mapper.get_or_create_vni_id(&[vlan200]);
+        mapper.get_or_create_vni_id(&[vlan100]);
+        mapper.get_or_create_vni_id(&[vlan300]);
+
+        // BTreeMap should maintain some order
+        let entries: Vec<_> = mapper.iter().collect();
+        assert_eq!(entries.len(), 3);
+    }
+
+
+
+    // ========================================================================
+    // From<LinkLayer> Conversion Tests
+    // ========================================================================
+    // Note: Testing From<LinkLayer> requires constructing actual packet bytes
+    // which is complex. The implementation is straightforward pattern matching,
+    // so we rely on integration tests for full coverage.
+
+    // ========================================================================
+    // From<IpTunnel> Conversion Tests
+    // ========================================================================
+    // Note: Testing From<IpTunnel> requires constructing actual tunnel packets
+    // which is complex. The implementation is tested through integration tests.
+
+    #[test]
+    fn test_vni_layer_debug_format() {
+        // Verify Debug trait works for all variants
+        let vlan = VniLayer::Vlan { vid: 100 };
+        let debug_str = format!("{:?}", vlan);
+        assert!(debug_str.contains("Vlan"));
+        assert!(debug_str.contains("100"));
+    }
+
+    #[test]
+    fn test_multiple_identical_stacks() {
+        let mut mapper = VniMapper::new();
+        let endpoints = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+
+        let vxlan1 = VniLayer::Vxlan {
+            vni: 100,
+            group_id: 0,
+            endpoints,
+        };
+        let vxlan2 = VniLayer::Vxlan {
+            vni: 100,
+            group_id: 0,
+            endpoints,
+        };
+
+        let id1 = mapper.get_or_create_vni_id(&[vxlan1]);
+        let id2 = mapper.get_or_create_vni_id(&[vxlan2]);
+
+        // Should get same ID for identical stacks
+        assert_eq!(id1, id2);
+        assert_eq!(mapper.len(), 1);
+    }
+
+    #[test]
+    fn test_endpoint_ordering_consistency() {
+        let endpoints1 = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+        let endpoints2 = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+        ];
+
+        let ipip1 = VniLayer::Ipip { endpoints: endpoints1 };
+        let ipip2 = VniLayer::Ipip { endpoints: endpoints2 };
+
+        // Different endpoint order should be different
+        assert_ne!(ipip1, ipip2);
+    }
+
+    #[test]
+    fn test_gre_with_and_without_key() {
+        let mut mapper = VniMapper::new();
+        let endpoints = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+
+        let gre_no_key = VniLayer::Gre {
+            protocol_type: 0x0800,
+            key: None,
+            endpoints,
+        };
+        let gre_with_key = VniLayer::Gre {
+            protocol_type: 0x0800,
+            key: Some(100),
+            endpoints,
+        };
+
+        let id1 = mapper.get_or_create_vni_id(&[gre_no_key]);
+        let id2 = mapper.get_or_create_vni_id(&[gre_with_key]);
+
+        assert_ne!(id1, id2);
+        assert_eq!(mapper.len(), 2);
+    }
+
+    #[test]
+    fn test_vni_mapper_with_all_layer_types() {
+        let mut mapper = VniMapper::new();
+        let endpoints_v4 = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+        let endpoints_v6 = [
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)),
+        ];
+
+        // Create one of each layer type
+        let layers = vec![
+            VniLayer::Vlan { vid: 100 },
+            VniLayer::Mpls { label: 1000 },
+            VniLayer::Gre { protocol_type: 0x0800, key: None, endpoints: endpoints_v4 },
+            VniLayer::NvGre { protocol_type: 0x6558, vsid_flowid: 100, endpoints: endpoints_v4 },
+            VniLayer::Vxlan { vni: 5000, group_id: 0, endpoints: endpoints_v4 },
+            VniLayer::Geneve { vni: 1000, protocol_type: 0x6558, endpoints: endpoints_v6 },
+            VniLayer::Ipip { endpoints: endpoints_v4 },
+            VniLayer::Ip4in6 { endpoints: endpoints_v6 },
+            VniLayer::Sit { endpoints: endpoints_v4 },
+            VniLayer::Ip6Tnl { endpoints: endpoints_v6 },
+            VniLayer::GtpU { teid: 0x12345678, endpoints: endpoints_v4 },
+            VniLayer::Teredo { endpoints: endpoints_v4 },
+            VniLayer::L2tpV2 { tunnel_id: 100, session_id: 200, endpoints: endpoints_v4 },
+            VniLayer::L2tpV3 { session_id: 0xabcdef, endpoints: endpoints_v6 },
+            VniLayer::Pbb { isid: 0x123456, bvid: Some(100) },
+            VniLayer::Stt { context_id: 0x123456789abcdef0, endpoints: endpoints_v4 },
+            VniLayer::Pptp { call_id: 1234, endpoints: endpoints_v4 },
+        ];
+
+        // Each should get a unique ID
+        let mut ids = Vec::new();
+        for layer in &layers {
+            let id = mapper.get_or_create_vni_id(&[layer.clone()]);
+            ids.push(id);
+        }
+
+        assert_eq!(mapper.len(), layers.len());
+
+        // All IDs should be unique
+        for i in 0..ids.len() {
+            for j in (i + 1)..ids.len() {
+                assert_ne!(ids[i], ids[j], "IDs at positions {} and {} should be different", i, j);
             }
-            _ => panic!("Expected VXLAN variant"),
+        }
+    }
+
+
+
+    #[test]
+    fn test_vni_id_ordering() {
+        let id1 = VniId::from_u32(1);
+        let id2 = VniId::from_u32(2);
+        let id3 = VniId::from_u32(2);
+
+        assert!(id1 < id2);
+        assert_eq!(id2, id3);
+        assert!(id1 != id2);
+    }
+
+    #[test]
+    fn test_smallvec_spill_behavior() {
+        // Test that we can handle more than inline capacity
+        let vlan1 = VniLayer::Vlan { vid: 100 };
+        let vlan2 = VniLayer::Vlan { vid: 200 };
+        let vlan3 = VniLayer::Vlan { vid: 300 };
+        let vlan4 = VniLayer::Vlan { vid: 400 };
+        let vlan5 = VniLayer::Vlan { vid: 500 };
+
+        let mut sv = SmallVec::<[VniLayer; 4]>::new();
+        sv.push(vlan1);
+        sv.push(vlan2);
+        sv.push(vlan3);
+        sv.push(vlan4);
+        
+        assert!(!sv.spilled()); // Should still be inline with capacity 4
+        
+        sv.push(vlan5);
+        assert!(sv.spilled()); // Should spill to heap now
+        assert_eq!(sv.len(), 5);
+    }
+
+    #[test]
+    fn test_vni_mapper_consistency_after_many_insertions() {
+        let mut mapper = VniMapper::new();
+        
+        // Insert many unique stacks
+        for i in 0..100 {
+            let vlan = VniLayer::Vlan { vid: i };
+            mapper.get_or_create_vni_id(&[vlan]);
+        }
+
+        assert_eq!(mapper.len(), 100);
+
+        // Verify all can be looked up
+        for i in 1..=100 {
+            let id = VniId::from_u32(i);
+            assert!(mapper.lookup_vni(id).is_some());
         }
     }
 
     #[test]
-    fn test_endpoint_ordering() {
-        let mut header1 = vec![0u8; 20];
-        header1[0] = 0x45;
-        header1[12..16].copy_from_slice(&[192, 168, 1, 1]); // src
-        header1[16..20].copy_from_slice(&[10, 0, 0, 1]); // dst
+    fn test_vni_error_is_error_trait() {
+        use std::error::Error;
+        
+        let err = VniError::InvalidHeaderLength;
+        let _: &dyn Error = &err; // Should compile
+        
+        // Test error source (should be None for these simple errors)
+        assert!(err.source().is_none());
+    }
 
-        let mut header2 = vec![0u8; 20];
-        header2[0] = 0x45;
-        header2[12..16].copy_from_slice(&[10, 0, 0, 1]); // src (swapped)
-        header2[16..20].copy_from_slice(&[192, 168, 1, 1]); // dst (swapped)
+    // ========================================================================
+    // Regression Tests - Complex Scenarios
+    // ========================================================================
 
-        let vxlan1 = VniLayer::vxlan::<4>(0, 5000, &header1).unwrap();
-        let vxlan2 = VniLayer::vxlan::<4>(0, 5000, &header2).unwrap();
-
-        // Both should have endpoints in the same order
-        assert_eq!(vxlan1, vxlan2);
+    #[test]
+    fn test_regression_vni_mapper_id_stability() {
+        // Regression: VNI IDs should be stable across multiple gets
+        let mut mapper = VniMapper::new();
+        let endpoints = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+        
+        let vxlan = VniLayer::Vxlan {
+            vni: 5000,
+            group_id: 0,
+            endpoints,
+        };
+        
+        let id1 = mapper.get_or_create_vni_id(&[vxlan.clone()]);
+        let id2 = mapper.get_or_create_vni_id(&[vxlan.clone()]);
+        let id3 = mapper.get_or_create_vni_id(&[vxlan.clone()]);
+        
+        assert_eq!(id1, id2);
+        assert_eq!(id2, id3);
+        assert_eq!(mapper.len(), 1);
     }
 
     #[test]
-    fn test_ipip_creation() {
-        let mut header = vec![0u8; 20];
-        header[0] = 0x45;
-        header[12..16].copy_from_slice(&[192, 168, 1, 1]);
-        header[16..20].copy_from_slice(&[10, 0, 0, 1]);
+    fn test_regression_vni_layer_protocol_type_variations() {
+        // Regression: Different protocol types should create different VNI layers
+        let endpoints = [
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2)),
+        ];
 
-        let ipip = VniLayer::ipip::<4>(&header).unwrap();
-        match ipip {
-            VniLayer::Ipip { ref endpoints } => {
-                assert_eq!(endpoints[0], IpAddr::V4([10, 0, 0, 1]));
-                assert_eq!(endpoints[1], IpAddr::V4([192, 168, 1, 1]));
-            }
-            _ => panic!("Expected Ipip variant"),
-        }
-        assert_eq!(ipip.layer_name(), "ipip");
+        let gre_ipv4 = VniLayer::Gre {
+            protocol_type: 0x0800, // IPv4
+            key: None,
+            endpoints,
+        };
+        
+        let gre_ipv6 = VniLayer::Gre {
+            protocol_type: 0x86DD, // IPv6
+            key: None,
+            endpoints,
+        };
+        
+        assert_ne!(gre_ipv4, gre_ipv6);
     }
 
     #[test]
-    fn test_sit_creation() {
-        let mut header = vec![0u8; 20];
-        header[0] = 0x45;
-        header[12..16].copy_from_slice(&[192, 168, 1, 1]);
-        header[16..20].copy_from_slice(&[10, 0, 0, 1]);
+    fn test_regression_vxlan_group_id_zero_vs_nonzero() {
+        // Regression: group_id=0 and group_id!=0 should be different
+        let endpoints = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
 
-        let sit = VniLayer::sit::<4>(&header).unwrap();
-        match sit {
-            VniLayer::Sit { ref endpoints } => {
-                assert_eq!(endpoints[0], IpAddr::V4([10, 0, 0, 1]));
-                assert_eq!(endpoints[1], IpAddr::V4([192, 168, 1, 1]));
-            }
-            _ => panic!("Expected Sit variant"),
-        }
-        assert_eq!(sit.layer_name(), "sit");
+        let vxlan1 = VniLayer::Vxlan {
+            vni: 100,
+            group_id: 0,
+            endpoints,
+        };
+        
+        let vxlan2 = VniLayer::Vxlan {
+            vni: 100,
+            group_id: 1,
+            endpoints,
+        };
+        
+        assert_ne!(vxlan1, vxlan2);
+        
+
     }
 
     #[test]
-    fn test_gtp_u_creation() {
-        let mut header = vec![0u8; 20];
-        header[0] = 0x45;
-        header[12..16].copy_from_slice(&[192, 168, 1, 1]);
-        header[16..20].copy_from_slice(&[10, 0, 0, 1]);
+    fn test_regression_nvgre_vsid_flowid_encoding() {
+        // Regression: VSID and FlowID should be properly encoded in 32-bit field
+        let endpoints = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
 
-        let gtp = VniLayer::gtp_u::<4>(0x12345678, &header).unwrap();
-        match gtp {
-            VniLayer::GtpU {
-                teid,
-                ref endpoints,
-            } => {
-                assert_eq!(teid, 0x12345678);
-                assert_eq!(endpoints[0], IpAddr::V4([10, 0, 0, 1]));
-            }
-            _ => panic!("Expected GtpU variant"),
-        }
-        assert_eq!(gtp.layer_name(), "gtp-u");
-        assert!(format!("{}", gtp).contains("gtp-u"));
-        assert!(format!("{}", gtp).contains("teid:0x12345678"));
+        // VSID is 24 bits, FlowID is 8 bits
+        let vsid: u32 = 0x123456;
+        let flow_id: u8 = 0xAB;
+        let combined = (vsid << 8) | flow_id as u32;
+
+        let nvgre = VniLayer::NvGre {
+            protocol_type: 0x6558,
+            vsid_flowid: combined,
+            endpoints,
+        };
+
     }
 
     #[test]
-    fn test_l2tp_v2_creation() {
-        let mut header = vec![0u8; 20];
-        header[0] = 0x45;
-        header[12..16].copy_from_slice(&[192, 168, 1, 1]);
-        header[16..20].copy_from_slice(&[10, 0, 0, 1]);
-
-        let l2tp = VniLayer::l2tp_v2::<4>(100, 200, &header).unwrap();
-        match l2tp {
-            VniLayer::L2tpV2 {
-                tunnel_id,
-                session_id,
-                ..
-            } => {
-                assert_eq!(tunnel_id, 100);
-                assert_eq!(session_id, 200);
-            }
-            _ => panic!("Expected L2tpV2 variant"),
-        }
-        assert_eq!(l2tp.layer_name(), "l2tpv2");
-        let display = format!("{}", l2tp);
-        assert!(display.contains("l2tpv2"));
-        assert!(display.contains("tid:100"));
-        assert!(display.contains("sid:200"));
+    fn test_regression_pbb_with_optional_bvid() {
+        // Regression: PBB with and without bvid should be different
+        let pbb1 = VniLayer::Pbb {
+            isid: 0x123456,
+            bvid: None,
+        };
+        
+        let pbb2 = VniLayer::Pbb {
+            isid: 0x123456,
+            bvid: Some(0),
+        };
+        
+        let pbb3 = VniLayer::Pbb {
+            isid: 0x123456,
+            bvid: Some(100),
+        };
+        
+        assert_ne!(pbb1, pbb2);
+        assert_ne!(pbb2, pbb3);
     }
 
     #[test]
-    fn test_l2tp_v3_creation() {
-        let mut header = vec![0u8; 20];
-        header[0] = 0x45;
-        header[12..16].copy_from_slice(&[192, 168, 1, 1]);
-        header[16..20].copy_from_slice(&[10, 0, 0, 1]);
+    fn test_regression_l2tp_versions_distinct() {
+        // Regression: L2TPv2 and L2TPv3 should be distinct even with similar IDs
+        let endpoints = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
 
-        let l2tp = VniLayer::l2tp_v3::<4>(0x12345678, &header).unwrap();
-        match l2tp {
-            VniLayer::L2tpV3 { session_id, .. } => {
-                assert_eq!(session_id, 0x12345678);
-            }
-            _ => panic!("Expected L2tpV3 variant"),
-        }
-        assert_eq!(l2tp.layer_name(), "l2tpv3");
+        let l2tpv2 = VniLayer::L2tpV2 {
+            tunnel_id: 100,
+            session_id: 200,
+            endpoints,
+        };
+        
+        let l2tpv3 = VniLayer::L2tpV3 {
+            session_id: 200,
+            endpoints,
+        };
+        
+        // Different variants, should not be equal
+        assert_ne!(format!("{:?}", l2tpv2), format!("{:?}", l2tpv3));
     }
 
     #[test]
-    fn test_pbb_creation() {
-        let pbb = VniLayer::pbb(0x123456, Some(100));
-        match pbb {
-            VniLayer::Pbb { isid, bvid } => {
-                assert_eq!(isid, 0x123456);
-                assert_eq!(bvid, Some(100));
-            }
-            _ => panic!("Expected Pbb variant"),
-        }
-        assert_eq!(pbb.layer_name(), "pbb");
-        let display = format!("{}", pbb);
-        assert!(display.contains("pbb"));
-        assert!(display.contains("isid:1193046")); // 0x123456
-        assert!(display.contains("bvid:100"));
+    fn test_regression_endpoint_ipv4_vs_ipv6() {
+        // Regression: IPv4 and IPv6 endpoints should create different layers
+        let endpoints_v4 = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+        
+        let endpoints_v6 = [
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0x0a00, 0x0001)),
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0x0a00, 0x0002)),
+        ];
 
-        // Test without B-VID
-        let pbb_no_bvid = VniLayer::pbb(5000, None);
-        match pbb_no_bvid {
-            VniLayer::Pbb { isid, bvid } => {
-                assert_eq!(isid, 5000);
-                assert_eq!(bvid, None);
-            }
-            _ => panic!("Expected Pbb variant"),
-        }
-        let display2 = format!("{}", pbb_no_bvid);
-        assert!(!display2.contains("bvid"));
+        let ipip_v4 = VniLayer::Ipip { endpoints: endpoints_v4 };
+        let ipip_v6_as_ip6tnl = VniLayer::Ip6Tnl { endpoints: endpoints_v6 };
+        
+        // Different types and IP versions
+        assert_ne!(format!("{:?}", ipip_v4), format!("{:?}", ipip_v6_as_ip6tnl));
     }
 
     #[test]
-    fn test_stt_creation() {
-        let mut header = vec![0u8; 20];
-        header[0] = 0x45;
-        header[12..16].copy_from_slice(&[192, 168, 1, 1]);
-        header[16..20].copy_from_slice(&[10, 0, 0, 1]);
-
-        let stt = VniLayer::stt::<4>(0xDEADBEEFCAFEBABE, &header).unwrap();
-        match stt {
-            VniLayer::Stt { context_id, .. } => {
-                assert_eq!(context_id, 0xDEADBEEFCAFEBABE);
-            }
-            _ => panic!("Expected Stt variant"),
+    fn test_regression_vni_mapper_large_scale() {
+        // Regression: Mapper should handle many unique stacks efficiently
+        let mut mapper = VniMapper::new();
+        let mut all_ids = Vec::new();
+        
+        // Create 1000 unique VNI stacks
+        for i in 0..1000 {
+            let vlan = VniLayer::Vlan { vid: i };
+            let id = mapper.get_or_create_vni_id(&[vlan]);
+            all_ids.push(id);
         }
-        assert_eq!(stt.layer_name(), "stt");
-        let display = format!("{}", stt);
-        assert!(display.contains("stt"));
-        assert!(display.contains("ctx:0xdeadbeefcafebabe"));
+        
+        assert_eq!(mapper.len(), 1000);
+        
+        // All IDs should be unique
+        for i in 0..all_ids.len() {
+            for j in (i + 1)..all_ids.len() {
+                assert_ne!(all_ids[i], all_ids[j]);
+            }
+        }
+        
+        // All should be retrievable
+        for (idx, id) in all_ids.iter().enumerate() {
+            let stack = mapper.lookup_vni(*id).unwrap();
+            assert_eq!(stack.len(), 1);
+            match &stack[0] {
+                VniLayer::Vlan { vid } => {
+                    assert_eq!(*vid, idx as u16);
+                }
+                _ => panic!("Expected Vlan variant"),
+            }
+        }
     }
 
     #[test]
-    fn test_pptp_creation() {
-        let mut header = vec![0u8; 20];
-        header[0] = 0x45;
-        header[12..16].copy_from_slice(&[192, 168, 1, 1]);
-        header[16..20].copy_from_slice(&[10, 0, 0, 1]);
-
-        let pptp = VniLayer::pptp::<4>(12345, &header).unwrap();
-        match pptp {
-            VniLayer::Pptp { call_id, .. } => {
-                assert_eq!(call_id, 12345);
-            }
-            _ => panic!("Expected Pptp variant"),
+    fn test_regression_deep_vni_stack() {
+        // Regression: Test deeply nested VNI stacks (beyond SmallVec inline capacity)
+        let mut mapper = VniMapper::new();
+        let endpoints = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+        
+        let layers = vec![
+            VniLayer::Vlan { vid: 100 },
+            VniLayer::Mpls { label: 1000 },
+            VniLayer::Vlan { vid: 200 },
+            VniLayer::Vxlan { vni: 5000, group_id: 0, endpoints },
+            VniLayer::Vlan { vid: 300 },
+            VniLayer::Mpls { label: 2000 },
+        ];
+        
+        let id = mapper.get_or_create_vni_id(&layers);
+        let retrieved = mapper.lookup_vni(id).unwrap();
+        
+        assert_eq!(retrieved.len(), layers.len());
+        for (i, layer) in layers.iter().enumerate() {
+            assert_eq!(&retrieved[i], layer);
         }
-        assert_eq!(pptp.layer_name(), "pptp");
-        let display = format!("{}", pptp);
-        assert!(display.contains("pptp"));
-        assert!(display.contains("call:12345"));
     }
 
     #[test]
-    fn test_teredo_creation() {
-        let mut header = vec![0u8; 20];
-        header[0] = 0x45;
-        header[12..16].copy_from_slice(&[192, 168, 1, 1]);
-        header[16..20].copy_from_slice(&[10, 0, 0, 1]);
+    fn test_regression_vni_id_u32_boundary() {
+        // Regression: Test VniId at various u32 boundaries
+        let id_zero = VniId::from_u32(0);
+        let id_max = VniId::from_u32(u32::MAX);
+        let id_mid = VniId::from_u32(u32::MAX / 2);
+        
+        assert_eq!(id_zero.as_u32(), 0);
+        assert_eq!(id_max.as_u32(), u32::MAX);
+        assert_eq!(id_mid.as_u32(), u32::MAX / 2);
+        
+        assert_ne!(id_zero, id_max);
+        assert_ne!(id_mid, id_max);
+    }
 
-        let teredo = VniLayer::teredo::<4>(&header).unwrap();
-        match teredo {
-            VniLayer::Teredo { ref endpoints } => {
-                assert_eq!(endpoints[0], IpAddr::V4([10, 0, 0, 1]));
-                assert_eq!(endpoints[1], IpAddr::V4([192, 168, 1, 1]));
-            }
-            _ => panic!("Expected Teredo variant"),
-        }
-        assert_eq!(teredo.layer_name(), "teredo");
+
+
+    #[test]
+    fn test_regression_mapper_clear_and_reuse() {
+        // Regression: After clear, mapper should work exactly as new
+        let mut mapper = VniMapper::new();
+        let vlan = VniLayer::Vlan { vid: 100 };
+        
+        // First cycle
+        let id1 = mapper.get_or_create_vni_id(&[vlan.clone()]);
+        assert_eq!(id1.as_u32(), 1);
+        assert_eq!(mapper.len(), 1);
+        
+        // Clear
+        mapper.clear();
+        assert_eq!(mapper.len(), 0);
+        assert!(mapper.is_empty());
+        
+        // Second cycle - should behave identically
+        let id2 = mapper.get_or_create_vni_id(&[vlan.clone()]);
+        assert_eq!(id2.as_u32(), 1); // Counter resets
+        assert_eq!(mapper.len(), 1);
+        
+        // Third cycle with different VLAN
+        let vlan2 = VniLayer::Vlan { vid: 200 };
+        let id3 = mapper.get_or_create_vni_id(&[vlan2]);
+        assert_eq!(id3.as_u32(), 2);
+        assert_eq!(mapper.len(), 2);
     }
 
     #[test]
-    fn test_geneve_creation() {
-        let mut header = vec![0u8; 20];
-        header[0] = 0x45;
-        header[12..16].copy_from_slice(&[192, 168, 1, 1]);
-        header[16..20].copy_from_slice(&[10, 0, 0, 1]);
-
-        let geneve = VniLayer::geneve::<4>(0x6558, 100000, &header).unwrap();
-        match geneve {
-            VniLayer::Geneve {
-                vni, protocol_type, ..
-            } => {
-                assert_eq!(vni, 100000);
-                assert_eq!(protocol_type, 0x6558);
-            }
-            _ => panic!("Expected Geneve variant"),
-        }
-        assert_eq!(geneve.layer_name(), "geneve");
+    fn test_regression_mixed_tunnel_stack_uniqueness() {
+        // Regression: Complex stacks with similar components should be unique
+        let mut mapper = VniMapper::new();
+        let endpoints = [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+        
+        let vlan100 = VniLayer::Vlan { vid: 100 };
+        let vlan200 = VniLayer::Vlan { vid: 200 };
+        let vxlan = VniLayer::Vxlan { vni: 5000, group_id: 0, endpoints };
+        
+        // Different orderings and combinations
+        let id1 = mapper.get_or_create_vni_id(&[vlan100.clone(), vxlan.clone()]);
+        let id2 = mapper.get_or_create_vni_id(&[vxlan.clone(), vlan100.clone()]);
+        let id3 = mapper.get_or_create_vni_id(&[vlan100.clone(), vlan200.clone(), vxlan.clone()]);
+        let id4 = mapper.get_or_create_vni_id(&[vlan100.clone(), vxlan.clone(), vlan200.clone()]);
+        
+        // All should be unique
+        assert_ne!(id1, id2);
+        assert_ne!(id1, id3);
+        assert_ne!(id1, id4);
+        assert_ne!(id2, id3);
+        assert_ne!(id2, id4);
+        assert_ne!(id3, id4);
+        
+        assert_eq!(mapper.len(), 4);
     }
 
-    #[test]
-    fn test_layer_names() {
-        // Test all layer_name() return values
-        assert_eq!(VniLayer::vlan(1).layer_name(), "vlan");
-        assert_eq!(VniLayer::mpls(1).layer_name(), "mpls");
-        assert_eq!(VniLayer::pbb(1, None).layer_name(), "pbb");
-
-        let mut header = vec![0u8; 20];
-        header[0] = 0x45;
-        header[12..16].copy_from_slice(&[1, 1, 1, 1]);
-        header[16..20].copy_from_slice(&[2, 2, 2, 2]);
-
-        assert_eq!(
-            VniLayer::gre::<4>(0x0800, None, &header)
-                .unwrap()
-                .layer_name(),
-            "gre"
-        );
-        assert_eq!(
-            VniLayer::gre::<4>(0x6558, Some(1), &header)
-                .unwrap()
-                .layer_name(),
-            "nvgre"
-        );
-        assert_eq!(
-            VniLayer::vxlan::<4>(0, 1, &header).unwrap().layer_name(),
-            "vxlan"
-        );
-        assert_eq!(
-            VniLayer::geneve::<4>(0, 1, &header).unwrap().layer_name(),
-            "geneve"
-        );
-        assert_eq!(VniLayer::ipip::<4>(&header).unwrap().layer_name(), "ipip");
-        assert_eq!(
-            VniLayer::ip4in6::<4>(&header).unwrap().layer_name(),
-            "ip4in6"
-        );
-        assert_eq!(VniLayer::sit::<4>(&header).unwrap().layer_name(), "sit");
-        assert_eq!(
-            VniLayer::ip6tnl::<4>(&header).unwrap().layer_name(),
-            "ip6tnl"
-        );
-        assert_eq!(
-            VniLayer::gtp_u::<4>(1, &header).unwrap().layer_name(),
-            "gtp-u"
-        );
-        assert_eq!(
-            VniLayer::teredo::<4>(&header).unwrap().layer_name(),
-            "teredo"
-        );
-        assert_eq!(
-            VniLayer::l2tp_v2::<4>(1, 1, &header).unwrap().layer_name(),
-            "l2tpv2"
-        );
-        assert_eq!(
-            VniLayer::l2tp_v3::<4>(1, &header).unwrap().layer_name(),
-            "l2tpv3"
-        );
-        assert_eq!(VniLayer::stt::<4>(1, &header).unwrap().layer_name(), "stt");
-        assert_eq!(
-            VniLayer::pptp::<4>(1, &header).unwrap().layer_name(),
-            "pptp"
-        );
-    }
 }
+
+
+

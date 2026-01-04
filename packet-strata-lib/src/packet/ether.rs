@@ -234,15 +234,15 @@ pub struct Ether8021qHeader {
 }
 
 impl Ether8021qHeader {
-    fn vlan_id(&self) -> u16 {
+    pub fn vlan_id(&self) -> u16 {
         self.tci.get() & 0x0FFF
     }
 
-    fn vlan_pcp(&self) -> u8 {
+    pub fn vlan_pcp(&self) -> u8 {
         ((self.tci.get() >> 13) & 0x07) as u8
     }
 
-    fn vlan_dei(&self) -> bool {
+    pub fn vlan_dei(&self) -> bool {
         ((self.tci.get() >> 12) & 0x01) != 0
     }
 }
