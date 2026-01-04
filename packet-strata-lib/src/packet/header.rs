@@ -381,11 +381,11 @@ pub enum TunnelLayer<'a> {
 ///
 /// Most tunnel protocols are encapsulated in IP (e.g., VXLAN over UDP/IP, GRE over IP).
 /// This structure preserves the outer IP header that encapsulates the tunnel.
-/// 
+///
 /// Some tunnels like PBB (MAC-in-MAC) operate at layer 2 and don't have an outer IP header,
 /// so the `outer` field is optional.
 #[derive(Debug, Clone)]
-pub struct IpTunnelLayer<'a> {
+pub struct NetworkTunnelLayer<'a> {
     /// Outer IP header (IPv4 or IPv6) that encapsulates the tunnel.
     /// None for layer 2 tunnels like PBB.
     pub outer: Option<NetworkLayer<'a>>,
@@ -393,7 +393,7 @@ pub struct IpTunnelLayer<'a> {
     pub tunnel: TunnelLayer<'a>,
 }
 
-impl<'a> IpTunnelLayer<'a> {
+impl<'a> NetworkTunnelLayer<'a> {
     /// Create a new IP tunnel layer with an outer IP header
     #[inline]
     pub fn new(outer: NetworkLayer<'a>, tunnel: TunnelLayer<'a>) -> Self {
@@ -425,7 +425,7 @@ impl<'a> IpTunnelLayer<'a> {
     }
 }
 
-impl std::fmt::Display for IpTunnelLayer<'_> {
+impl std::fmt::Display for NetworkTunnelLayer<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(ref outer) = self.outer {
             write!(f, "{} > {}", outer, self.tunnel)
