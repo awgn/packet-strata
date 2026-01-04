@@ -96,9 +96,18 @@ fn process_pcap(
                                     args.full_parse,
                                 );
                             }
-                            PcapBlockOwned::NG(Block::SimplePacket(_spb)) => {
+                            PcapBlockOwned::NG(Block::SimplePacket(spb)) => {
                                 packet_count += 1;
-                                info!("Packet #{}: timestamp = N/A (Simple Packet)", packet_count);
+                                bytes_count += spb.origlen as u64;
+                                process::process_packet(
+                                    packet_count,
+                                    link_type,
+                                    &spb,
+                                    &mut local_stats,
+                                    stats,
+                                    args.dump_packet,
+                                    args.full_parse,
+                                );
                             }
                             PcapBlockOwned::NG(Block::SectionHeader(_shb)) => {
                                 info!("PCAPNG Section Header found");

@@ -54,13 +54,13 @@ pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
     local_stats.total_bytes += pkt.caplen() as u64;
 
     if link_type.is_none() {
-        *link_type = Some(PacketIter::guess_link_type(pkt.payload()));
+        *link_type = Some(PacketIter::guess_link_type(pkt.data()));
     }
 
-    let iter = PacketIter::new(pkt.payload(), link_type.unwrap());
+    let iter = PacketIter::new(pkt.data(), link_type.unwrap());
 
     if dump_packet {
-        println!("{:>5}   {} ({} bytes)", local_stats.total_packets, pkt.tstamp(), pkt.payload().len());
+        println!("{:>5}   {} ({} bytes)", local_stats.total_packets, pkt.timestamp_string(), pkt.data().len());
     }
 
     for result in iter {
@@ -155,13 +155,13 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
     local_stats.total_bytes += pkt.caplen() as u64;
 
     if link_type.is_none() {
-        *link_type = Some(PacketIter::guess_link_type(pkt.payload()));
+        *link_type = Some(PacketIter::guess_link_type(pkt.data()));
     }
 
-    match Packet::from_bytes(pkt.payload(), link_type.unwrap(), ParseMode::Innermost) {
+    match Packet::from_bytes(pkt.data(), link_type.unwrap(), ParseMode::Innermost) {
         Ok(packet) => {
             if dump_packet {
-                println!("{:>5}   {} ({} bytes)", local_stats.total_packets, pkt.tstamp(), pkt.payload().len());
+                println!("{:>5}   {} ({} bytes)", local_stats.total_packets, pkt.timestamp_string(), pkt.data().len());
                 print!("{}", packet);
             }
 
