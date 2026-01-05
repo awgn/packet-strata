@@ -18,3 +18,4 @@ tracing-subscriber.workspace = true
 
 # Date/time
 chrono.workspace = true
+ahash = "0.8.12"

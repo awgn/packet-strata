@@ -2,9 +2,11 @@ use packet_strata::packet::header::{LinkLayer, NetworkLayer, TransportLayer, Tun
 use packet_strata::packet::iter::{Header, LinkType, PacketIter};
 use packet_strata::packet::tunnel::ipip::IpipType;
 use packet_strata::packet::{Packet, ParseMode};
+use packet_strata::tracker::flow_key::{FlowKeyV4, FlowKeyV6};
 
 use crate::packet_metadata::PacketMetadata;
 use crate::stats::{LocalStats, Stats, FLUSH_INTERVAL};
+use crate::{Args, FlowTracker};
 
 /// Process a single packet using the PacketIter iterator
 ///
@@ -17,13 +19,29 @@ pub fn process_packet<'a, Pkt: PacketMetadata>(
     pkt: &'a Pkt,
     local_stats: &mut LocalStats,
     stats: &Stats,
-    dump_packet: bool,
-    full_packet: bool,
+    flow_tracker: &mut FlowTracker,
+    args: &Args,
 ) {
-    if full_packet {
-        process_full_packet(_pkt_count, link_type, pkt, local_stats, stats, dump_packet);
+    if args.full_parse {
+        process_full_packet(
+            _pkt_count,
+            link_type,
+            pkt,
+            local_stats,
+            stats,
+            flow_tracker,
+            args,
+        );
     } else {
-        process_iterate_headers(_pkt_count, link_type, pkt, local_stats, stats, dump_packet);
+        process_iterate_headers(
+            _pkt_count,
+            link_type,
+            pkt,
+            local_stats,
+            stats,
+            flow_tracker,
+            args,
+        );
     }
 }
 
@@ -33,7 +51,8 @@ pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
     pkt: &'a Pkt,
     local_stats: &mut LocalStats,
     stats: &Stats,
-    dump_packet: bool,
+    flow_tracker: &mut FlowTracker,
+    args: &Args,
 ) {
     local_stats.total_packets += 1;
     local_stats.total_bytes += pkt.caplen() as u64;
@@ -44,7 +63,7 @@ pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
 
     let iter = PacketIter::new(pkt.data(), link_type.unwrap());
 
-    if dump_packet {
+    if args.dump_packet {
         println!(
             "{:>5}   {} ({} bytes)",
             local_stats.total_packets,
@@ -56,7 +75,7 @@ pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
     for result in iter {
         match result {
             Ok(header) => {
-                if dump_packet {
+                if args.dump_packet {
                     println!("        {header}");
                 }
                 match header {
@@ -138,7 +157,8 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
     pkt: &'a Pkt,
     local_stats: &mut LocalStats,
     stats: &Stats,
-    dump_packet: bool,
+    flow_tracker: &mut FlowTracker,
+    args: &Args,
 ) {
     local_stats.total_packets += 1;
     local_stats.total_bytes += pkt.caplen() as u64;
@@ -149,7 +169,7 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
 
     match Packet::from_bytes(pkt.data(), link_type.unwrap(), ParseMode::Innermost) {
         Ok(packet) => {
-            if dump_packet {
+            if args.dump_packet {
                 println!(
                     "{:>5}   {} ({} bytes)",
                     local_stats.total_packets,
@@ -175,8 +195,26 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
             // Update stats for network layer
             if let Some(network) = packet.network() {
                 match network {
-                    NetworkLayer::Ipv4(_) => local_stats.ipv4 += 1,
-                    NetworkLayer::Ipv6(_) => local_stats.ipv6 += 1,
+                    NetworkLayer::Ipv4(_) => {
+                        local_stats.ipv4 += 1;
+                        if args.flow_tracker {
+                            if let Some(key) = FlowKeyV4::new(&packet, &mut flow_tracker.vni_mapper)
+                            {
+                                let ctr = flow_tracker.v4.entry(key).or_insert_with(|| 0);
+                                *ctr += 1;
+                            }
+                        }
+                    }
+                    NetworkLayer::Ipv6(_) => {
+                        local_stats.ipv6 += 1;
+                        if args.flow_tracker {
+                            if let Some(key) = FlowKeyV6::new(&packet, &mut flow_tracker.vni_mapper)
+                            {
+                                let ctr = flow_tracker.v6.entry(key).or_insert_with(|| 0);
+                                *ctr += 1;
+                            }
+                        }
+                    }
                     NetworkLayer::Mpls(_) => local_stats.mpls += 1,
                 }
             }

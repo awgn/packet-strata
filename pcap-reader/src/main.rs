@@ -1,4 +1,6 @@
+use ahash::HashMapExt;
 use clap::Parser;
+use packet_strata::tracker::{flow_key::{FlowKeyV4, FlowKeyV6}, vni::VniMapper};
 use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::*;
 use std::fs::File;
@@ -25,6 +27,10 @@ struct Args {
     #[arg(short, long)]
     full_parse: bool,
 
+    /// track flows and VNI (tunnels)
+    #[arg(long, requires ="full_parse")]
+    flow_tracker: bool,
+
     /// print statistics at the end
     #[arg(short, long)]
     stats: bool,
@@ -42,21 +48,46 @@ fn main() {
     let args = Args::parse();
 
     let stats = stats::Stats::default();
+    let mut flow_tracker = FlowTracker::new();
 
     // Read and process PCAP file
     info!("Reading PCAP file: {:?}", args.pcap);
-    if let Err(e) = process_pcap(&args.pcap, &args, &stats) {
+    if let Err(e) = process_pcap(&args.pcap, &args, &stats, &mut flow_tracker) {
         error!("Failed to process PCAP file: {}", e);
         std::process::exit(1);
     }
     if args.stats {
         println!("{stats}");
     }
+
+    if args.flow_tracker {
+        println!("--- Flow Tracker Stats ---");
+        println!("IPv4 Flows: {}", flow_tracker.v4.len());
+        println!("IPv6 Flows: {}", flow_tracker.v6.len());
+        println!("VNI mapping: {}", flow_tracker.vni_mapper.len());
+    }
+
     info!("PCAP processing completed!");
 }
 
+struct FlowTracker {
+    v4: ahash::HashMap<FlowKeyV4, u64>,
+    v6: ahash::HashMap<FlowKeyV6, u64>,
+    vni_mapper: VniMapper,
+}
+
+impl FlowTracker {
+    fn new() -> Self {
+        Self {
+            v4: ahash::HashMap::new(),
+            v6: ahash::HashMap::new(),
+            vni_mapper: VniMapper::new(),
+        }
+    }
+}
+
 /// Process PCAP file packet by packet
-fn process_pcap(pcap_path: &PathBuf, args: &Args, stats: &stats::Stats) -> Result<(), String> {
+fn process_pcap(pcap_path: &PathBuf, args: &Args, stats: &stats::Stats, flow_tracker: &mut FlowTracker) -> Result<(), String> {
     // Create thread-local stats for high-performance counting
     let mut local_stats = stats::LocalStats::new();
 
@@ -68,7 +99,6 @@ fn process_pcap(pcap_path: &PathBuf, args: &Args, stats: &stats::Stats) -> Resul
     let mut bytes_count = 0;
 
     let start = std::time::Instant::now();
-
     let link_type = &mut None;
 
     // Try to create a PCAPNG reader first
@@ -88,8 +118,8 @@ fn process_pcap(pcap_path: &PathBuf, args: &Args, stats: &stats::Stats) -> Resul
                                     &epb,
                                     &mut local_stats,
                                     stats,
-                                    args.dump_packet,
-                                    args.full_parse,
+                                    flow_tracker,
+                                    args,
                                 );
                             }
                             PcapBlockOwned::NG(Block::SimplePacket(spb)) => {
@@ -101,8 +131,8 @@ fn process_pcap(pcap_path: &PathBuf, args: &Args, stats: &stats::Stats) -> Resul
                                     &spb,
                                     &mut local_stats,
                                     stats,
-                                    args.dump_packet,
-                                    args.full_parse,
+                                    flow_tracker,
+                                    args,
                                 );
                             }
                             PcapBlockOwned::NG(Block::SectionHeader(_shb)) => {
@@ -147,8 +177,8 @@ fn process_pcap(pcap_path: &PathBuf, args: &Args, stats: &stats::Stats) -> Resul
                                     &packet,
                                     &mut local_stats,
                                     stats,
-                                    args.dump_packet,
-                                    args.full_parse,
+                                    flow_tracker,
+                                    args,
                                 );
                             }
                             PcapBlockOwned::LegacyHeader(_header) => {
