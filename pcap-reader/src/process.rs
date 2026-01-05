@@ -48,7 +48,7 @@ pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
         println!(
             "{:>5}   {} ({} bytes)",
             local_stats.total_packets,
-            pkt.timestamp_string(),
+            pkt.timestamp(),
             pkt.data().len()
         );
     }
@@ -153,7 +153,7 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
                 println!(
                     "{:>5}   {} ({} bytes)",
                     local_stats.total_packets,
-                    pkt.timestamp_string(),
+                    pkt.timestamp(),
                     pkt.data().len()
                 );
                 print!("{}", packet);
