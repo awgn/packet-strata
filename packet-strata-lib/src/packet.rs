@@ -247,11 +247,6 @@ impl<'a> Packet<'a> {
                             if mode == ParseMode::Outermost {
                                 // Store the outer IP header as network layer
                                 // The tunnel's outer header is the network layer
-                                match &tun {
-                                    IpipTunnel { .. } => {
-                                        // outer_header is already captured, just stop
-                                    }
-                                }
                                 next_layer = NextLayer::Done;
                                 remaining = rest;
                             } else {

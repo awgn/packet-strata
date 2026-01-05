@@ -501,8 +501,10 @@ impl TryFrom<&Packet<'_>> for SmallVec<[VniLayer; 4]> {
 ///
 /// This is an opaque identifier used to reference a specific VNI layer stack
 /// in the mapper. The actual value has no semantic meaning outside of the mapper.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VniId(u32);
+
+pub const VNI_NULL: VniId = VniId(0);
 
 impl VniId {
     /// Get the raw u32 value (primarily for debugging/serialization)
@@ -899,9 +901,9 @@ mod tests {
         let vlan2 = VniLayer::Vlan { vid: 200 };
         let mpls = VniLayer::Mpls { label: 1000 };
 
-        mapper.get_or_create_vni_id(&[vlan1.clone()]);
-        mapper.get_or_create_vni_id(&[vlan2.clone()]);
-        mapper.get_or_create_vni_id(&[mpls.clone()]);
+        mapper.get_or_create_vni_id(std::slice::from_ref(&vlan1));
+        mapper.get_or_create_vni_id(std::slice::from_ref(&vlan2));
+        mapper.get_or_create_vni_id(std::slice::from_ref(&mpls));
 
         let entries: Vec<_> = mapper.iter().collect();
         assert_eq!(entries.len(), 3);
@@ -1013,7 +1015,7 @@ mod tests {
         let mut mapper = VniMapper::new();
         let vlan = VniLayer::Vlan { vid: 100 };
 
-        let id1 = mapper.get_or_create_vni_id(&[vlan.clone()]);
+        let id1 = mapper.get_or_create_vni_id(std::slice::from_ref(&vlan));
         assert_eq!(id1.as_u32(), 1);
 
         mapper.clear();
@@ -1302,7 +1304,7 @@ mod tests {
         // Each should get a unique ID
         let mut ids = Vec::new();
         for layer in &layers {
-            let id = mapper.get_or_create_vni_id(&[layer.clone()]);
+            let id = mapper.get_or_create_vni_id(std::slice::from_ref(layer));
             ids.push(id);
         }
 
@@ -1402,9 +1404,9 @@ mod tests {
             endpoints,
         };
 
-        let id1 = mapper.get_or_create_vni_id(&[vxlan.clone()]);
-        let id2 = mapper.get_or_create_vni_id(&[vxlan.clone()]);
-        let id3 = mapper.get_or_create_vni_id(&[vxlan.clone()]);
+        let id1 = mapper.get_or_create_vni_id(std::slice::from_ref(&vxlan));
+        let id2 = mapper.get_or_create_vni_id(std::slice::from_ref(&vxlan));
+        let id3 = mapper.get_or_create_vni_id(std::slice::from_ref(&vxlan));
 
         assert_eq!(id1, id2);
         assert_eq!(id2, id3);
@@ -1904,7 +1906,7 @@ mod tests {
         let vlan = VniLayer::Vlan { vid: 100 };
 
         // First cycle
-        let id1 = mapper.get_or_create_vni_id(&[vlan.clone()]);
+        let id1 = mapper.get_or_create_vni_id(std::slice::from_ref(&vlan));
         assert_eq!(id1.as_u32(), 1);
         assert_eq!(mapper.len(), 1);
 
@@ -1914,7 +1916,7 @@ mod tests {
         assert!(mapper.is_empty());
 
         // Second cycle - should behave identically
-        let id2 = mapper.get_or_create_vni_id(&[vlan.clone()]);
+        let id2 = mapper.get_or_create_vni_id(std::slice::from_ref(&vlan));
         assert_eq!(id2.as_u32(), 1); // Counter resets
         assert_eq!(mapper.len(), 1);
 

@@ -1,121 +1,150 @@
+use smallvec::SmallVec;
+use std::hash::Hash;
+use std::net::{Ipv4Addr, Ipv6Addr};
+
+use crate::packet::protocol::IpProto;
+use crate::{
+    packet::{header::NetworkLayer, Packet},
+    tracker::vni::{VniId, VniLayer, VniMapper, VNI_NULL},
+};
+
+/// Common trait for all flow key types
+///
+/// This trait defines the interface for creating flow keys from packets.
+/// Different implementations can create keys with different granularities
+/// (e.g., 5-tuple with VNI, 3-tuple, MAC-based, etc.)
+pub trait FlowKey: Sized + Hash + Eq + Clone {
+    /// Create a new flow key from a packet
+    fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self>;
+}
+
+/// Helper function to extract VNI from packet tunnels
+///
+/// This function is shared between all FlowKey implementations to avoid code duplication.
+/// Returns `VNI_NULL` if there are no tunnel layers, otherwise extracts and maps the VNI stack.
+#[inline]
+fn extract_vni(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<VniId> {
+    let network_tunnel_layers = pkt.tunnels();
+
+    if network_tunnel_layers.is_empty() {
+        return Some(VNI_NULL);
+    }
+
+    let vni_stack = network_tunnel_layers
+        .iter()
+        .map(TryInto::try_into)
+        .collect::<Result<SmallVec<[VniLayer; 4]>, _>>()
+        .ok()?;
+
+    Some(vni_mapper.get_or_create_vni_id(&vni_stack))
+}
+
+/// Helper function to extract transport layer ports
+///
+/// Returns (src_port, dst_port) or (0, 0) if no transport layer is present.
+#[inline]
+fn extract_ports(pkt: &Packet<'_>) -> (u16, u16) {
+    pkt.transport()
+        .map(|t| t.ports())
+        .unwrap_or((0, 0))
+}
+
+/// IPv4 5-tuple flow key with VNI support
+///
+/// This key uniquely identifies a network flow using:
+/// - Source and destination IPv4 addresses
+/// - Source and destination ports
+/// - IP protocol number
+/// - Virtual Network Identifier (VNI) for tunnel-aware flow tracking
 #[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
 pub struct FlowKeyV4 {
-    pub teid: u32, // New field (Tunnel Endpoint ID)
-    pub src_ip: [u8; 4],
-    pub dst_ip: [u8; 4],
+    pub src_ip: Ipv4Addr,
+    pub dst_ip: Ipv4Addr,
     pub src_port: u16,
     pub dst_port: u16,
-    pub protocol: u8,
+    pub protocol: IpProto,
+    pub vni: VniId,
 }
 
 impl FlowKeyV4 {
-    pub fn new_from_ethernet(payload: &[u8], len: usize) -> Option<Self> {
-        // 1. Absolute minimum length check (Ethernet header min = 14 bytes)
-        if len < 14 || payload.len() < len {
+    /// Create a new IPv4 flow key from a packet
+    ///
+    /// Returns `None` if the packet does not contain an IPv4 header or if VNI extraction fails.
+    pub fn new(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
+        let NetworkLayer::Ipv4(ipv4) = pkt.network()? else {
             return None;
-        }
-
-        // Start checking EtherType at offset 12
-        let mut cur_offset = 12;
-
-        // Read the current EtherType
-        let mut eth_type = u16::from_be_bytes([payload[cur_offset], payload[cur_offset + 1]]);
-
-        // 2. VLAN PARSING LOOP (Supports Nested VLAN / QinQ)
-        // 0x8100 = Customer VLAN (802.1Q), 0x88A8 = Service VLAN (802.1ad)
-        while eth_type == 0x8100 || eth_type == 0x88A8 {
-            // A VLAN tag is 4 bytes long (2 TPID + 2 TCI).
-            // We need to skip them to reach the next EtherType.
-            cur_offset += 4;
-
-            // Bounds check: We need at least 2 bytes to read the next EtherType
-            if cur_offset + 2 > len {
-                return None;
-            }
-
-            // Read the next EtherType (could be another VLAN or the real protocol)
-            eth_type = u16::from_be_bytes([payload[cur_offset], payload[cur_offset + 1]]);
-        }
-
-        // 3. IPV4 CHECK
-        // If after the VLAN chain we don't find IPv4 (0x0800), we exit.
-        if eth_type != 0x0800 {
-            return None;
-        }
-
-        // The IPv4 header starts AFTER the last EtherType (2 bytes)
-        let ip_offset = cur_offset + 2;
-
-        // Check: do we have enough data for the minimum IPv4 header (20 bytes)?
-        if ip_offset + 20 > len {
-            return None;
-        }
-
-        // 4. IPV4 PARSING
-        let ver_ihl = payload[ip_offset];
-
-        // Version must be 4
-        if (ver_ihl >> 4) != 4 {
-            return None;
-        }
-
-        // IHL is in 32-bit words. (x 4 to get bytes)
-        let ip_header_len = ((ver_ihl & 0x0F) as usize) * 4;
-
-        // Minimum IHL is 5 words (20 bytes)
-        if ip_header_len < 20 {
-            return None;
-        }
-
-        let protocol = payload[ip_offset + 9];
-
-        // Bounds check for the entire IP header (needed to read src/dst IPs safely)
-        if ip_offset + 20 > len {
-            return None;
-        }
-
-        // src IP offset: 12, dst IP offset: 16 (relative to ip_offset)
-        let src_ip_slice = &payload[ip_offset + 12..ip_offset + 16];
-        let dst_ip_slice = &payload[ip_offset + 16..ip_offset + 20];
-
-        // Safe conversion (we know slices are length 4)
-        let src_ip: [u8; 4] = src_ip_slice.try_into().unwrap_or([0; 4]);
-        let dst_ip: [u8; 4] = dst_ip_slice.try_into().unwrap_or([0; 4]);
-
-        // 5. TRANSPORT PARSING
-        let trans_offset = ip_offset + ip_header_len;
-
-        // Minimum 4 bytes needed to read ports (src 2b + dst 2b)
-        if trans_offset + 4 > len {
-            return None;
-        }
-
-        let (src_port, dst_port) = match protocol {
-            6 | 17 => {
-                // TCP (6) or UDP (17)
-                let sp = u16::from_be_bytes([payload[trans_offset], payload[trans_offset + 1]]);
-                let dp = u16::from_be_bytes([payload[trans_offset + 2], payload[trans_offset + 3]]);
-                (sp, dp)
-            }
-            _ => return None, // Protocol not tracked
         };
 
-        // 6. CANONICALIZATION
-        // Sort IPs and ports to ensure bidirectional flows map to the same key
-        let (c_src_ip, c_dst_ip, c_src_port, c_dst_port) =
-            if src_ip > dst_ip || (src_ip == dst_ip && src_port > dst_port) {
-                (dst_ip, src_ip, dst_port, src_port)
-            } else {
-                (src_ip, dst_ip, src_port, dst_port)
-            };
+        let src_ip = ipv4.header.src_ip();
+        let dst_ip = ipv4.header.dst_ip();
+        let protocol = ipv4.header.protocol();
+        let (src_port, dst_port) = extract_ports(pkt);
+        let vni = extract_vni(pkt, vni_mapper)?;
 
         Some(Self {
-            teid: 0, // Placeholder as requested
-            src_ip: c_src_ip,
-            dst_ip: c_dst_ip,
-            src_port: c_src_port,
-            dst_port: c_dst_port,
+            src_ip,
+            dst_ip,
+            src_port,
+            dst_port,
             protocol,
+            vni,
         })
+    }
+}
+
+impl FlowKey for FlowKeyV4 {
+    #[inline]
+    fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
+        Self::new(pkt, vni_mapper)
+    }
+}
+
+/// IPv6 5-tuple flow key with VNI support
+///
+/// This key uniquely identifies a network flow using:
+/// - Source and destination IPv6 addresses
+/// - Source and destination ports
+/// - IP protocol number (next header)
+/// - Virtual Network Identifier (VNI) for tunnel-aware flow tracking
+#[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
+pub struct FlowKeyV6 {
+    pub src_ip: Ipv6Addr,
+    pub dst_ip: Ipv6Addr,
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub protocol: IpProto,
+    pub vni: VniId,
+}
+
+impl FlowKeyV6 {
+    /// Create a new IPv6 flow key from a packet
+    ///
+    /// Returns `None` if the packet does not contain an IPv6 header or if VNI extraction fails.
+    pub fn new(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
+        let NetworkLayer::Ipv6(ipv6) = pkt.network()? else {
+            return None;
+        };
+
+        let src_ip = ipv6.header.src_ip();
+        let dst_ip = ipv6.header.dst_ip();
+        let protocol = ipv6.header.next_header();
+        let (src_port, dst_port) = extract_ports(pkt);
+        let vni = extract_vni(pkt, vni_mapper)?;
+
+        Some(Self {
+            src_ip,
+            dst_ip,
+            src_port,
+            dst_port,
+            protocol,
+            vni,
+        })
+    }
+}
+
+impl FlowKey for FlowKeyV6 {
+    #[inline]
+    fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
+        Self::new(pkt, vni_mapper)
     }
 }

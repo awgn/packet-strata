@@ -346,6 +346,47 @@ pub enum TransportLayer<'a> {
     Icmp6(&'a Icmp6Header),
 }
 
+impl TransportLayer<'_> {
+    #[inline]
+    pub fn ports(&self) -> (u16, u16) {
+        match self {
+            TransportLayer::Tcp(h) => h.ports(),
+            TransportLayer::Udp(h) => h.ports(),
+            TransportLayer::Sctp(h) => h.ports(),
+            TransportLayer::Icmp(_) => (0, 0),
+            TransportLayer::Icmp6(_) => (0, 0),
+        }
+    }
+}
+
+pub trait PortLayer {
+    #[inline]
+    fn ports(&self) -> (u16, u16) {
+        (0, 0)
+    }
+}
+
+impl PortLayer for &TcpHeaderOpt<'_> {
+    #[inline]
+    fn ports(&self) -> (u16, u16) {
+        (self.header.src_port(), self.header.dst_port())
+    }
+}
+
+impl PortLayer for &UdpHeader {
+    #[inline]
+    fn ports(&self) -> (u16, u16) {
+        (self.src_port(), self.dst_port())
+    }
+}
+
+impl PortLayer for &SctpHeader{
+    #[inline]
+    fn ports(&self) -> (u16, u16) {
+        (self.src_port(), self.dst_port())
+    }
+}
+
 impl std::fmt::Display for TransportLayer<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
