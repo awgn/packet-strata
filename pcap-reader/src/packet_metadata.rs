@@ -4,7 +4,7 @@ use chrono::DateTime;
 use pcap_parser::{EnhancedPacketBlock, LegacyPcapBlock, SimplePacketBlock};
 
 #[derive (Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TimestampNsec(u64);
+pub struct TimestampNsec(pub u64);
 
 impl Display for TimestampNsec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

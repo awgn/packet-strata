@@ -13,6 +13,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+ahash = "0.8.12"
+hashlink = "0.11.0"
 smallvec = { workspace = true, features = ["const_new"] }
 smol_str.workspace = true
 thiserror.workspace = true

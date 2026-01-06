@@ -1,11 +1,14 @@
-use ahash::HashMapExt;
+use ahash::RandomState;
 use clap::Parser;
-use packet_strata::tracker::{flow_key::{FlowKeyV4, FlowKeyV6}, vni::VniMapper};
+use hashlink::LinkedHashMap;
+use packet_strata::tracker::{Timestamped, Tracker, flow_key::{FlowKeyV4, FlowKeyV6}, vni::VniMapper};
 use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::*;
-use std::fs::File;
+use std::{fs::File};
 use std::path::PathBuf;
 use tracing::{error, info};
+
+use crate::packet_metadata::TimestampNsec;
 
 mod packet_metadata;
 mod process;
@@ -70,17 +73,35 @@ fn main() {
     info!("PCAP processing completed!");
 }
 
+struct Flow {
+    timestamp: TimestampNsec,
+    counter: u64,
+}
+
+impl Timestamped for Flow {
+    type Timestamp = TimestampNsec;
+    #[inline]
+    fn timestamp(&self) -> &Self::Timestamp {
+        &self.timestamp
+    }
+
+    #[inline]
+    fn set_timestamp(&mut self, ts: Self::Timestamp) {
+        self.timestamp = ts;
+    }
+}
+
 struct FlowTracker {
-    v4: ahash::HashMap<FlowKeyV4, u64>,
-    v6: ahash::HashMap<FlowKeyV6, u64>,
+    v4: Tracker<FlowKeyV4, Flow>,
+    v6: Tracker<FlowKeyV6, Flow>,
     vni_mapper: VniMapper,
 }
 
 impl FlowTracker {
     fn new() -> Self {
         Self {
-            v4: ahash::HashMap::new(),
-            v6: ahash::HashMap::new(),
+            v4: Tracker::with_capacity(100000),
+            v6: Tracker::with_capacity(100000),
             vni_mapper: VniMapper::new(),
         }
     }

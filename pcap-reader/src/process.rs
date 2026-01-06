@@ -4,9 +4,9 @@ use packet_strata::packet::tunnel::ipip::IpipType;
 use packet_strata::packet::{Packet, ParseMode};
 use packet_strata::tracker::flow_key::{FlowKeyV4, FlowKeyV6};
 
-use crate::packet_metadata::PacketMetadata;
+use crate::packet_metadata::{PacketMetadata, TimestampNsec};
 use crate::stats::{LocalStats, Stats, FLUSH_INTERVAL};
-use crate::{Args, FlowTracker};
+use crate::{Args, Flow, FlowTracker};
 
 /// Process a single packet using the PacketIter iterator
 ///
@@ -200,8 +200,14 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
                         if args.flow_tracker {
                             if let Some(key) = FlowKeyV4::new(&packet, &mut flow_tracker.vni_mapper)
                             {
-                                let ctr = flow_tracker.v4.entry(key).or_insert_with(|| 0);
-                                *ctr += 1;
+                                let flow = flow_tracker.v4.get_or_insert_with(&key, || -> Flow {
+                                    Flow {
+                                        timestamp: TimestampNsec(0),
+                                        counter: 0,
+                                    }
+                                });
+                                flow.counter += 1;
+                                flow.timestamp = pkt.timestamp();
                             }
                         }
                     }
@@ -210,8 +216,14 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
                         if args.flow_tracker {
                             if let Some(key) = FlowKeyV6::new(&packet, &mut flow_tracker.vni_mapper)
                             {
-                                let ctr = flow_tracker.v6.entry(key).or_insert_with(|| 0);
-                                *ctr += 1;
+                                let flow = flow_tracker.v6.get_or_insert_with(&key, || -> Flow {
+                                    Flow {
+                                        timestamp: TimestampNsec(0),
+                                        counter: 0,
+                                    }
+                                });
+                                flow.counter += 1;
+                                flow.timestamp = pkt.timestamp();
                             }
                         }
                     }

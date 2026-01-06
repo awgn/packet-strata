@@ -19,3 +19,4 @@ tracing-subscriber.workspace = true
 # Date/time
 chrono.workspace = true
 ahash = "0.8.12"
+hashlink = "0.11.0"
