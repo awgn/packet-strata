@@ -9,7 +9,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 authors = ["Nicola Bonelli <nicola.bonelli@larthia.com>"]
 description = "A high-performance packet parsing library"
@@ -22,10 +22,10 @@ categories = ["network-programming", "parser-implementations"]
 keywords = ["packet", "parsing", "network", "pcap", "protocols"]
 
 [workspace.dependencies]
-smallvec = "1.13"
+smallvec = "1.15"
 smol_str = "0.3"
 thiserror = "2.0"
-zerocopy = { version = "0.8.30", features = ["derive"] }
+zerocopy = { version = "0.8.33", features = ["derive"] }
 
 # PCAP parsing
 pcap-parser = "0.15"
