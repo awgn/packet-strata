@@ -1,10 +1,14 @@
 use ahash::RandomState;
 use clap::Parser;
 use hashlink::LinkedHashMap;
-use packet_strata::tracker::{Timestamped, Tracker, flow_key::{FlowKeyV4, FlowKeyV6}, vni::VniMapper};
+use packet_strata::tracker::{
+    flow_key::{FlowKeyV4, FlowKeyV6, Symmetric},
+    vni::VniMapper,
+    Timestamped, Tracker,
+};
 use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::*;
-use std::{fs::File};
+use std::fs::File;
 use std::path::PathBuf;
 use tracing::{error, info};
 
@@ -31,7 +35,7 @@ struct Args {
     full_parse: bool,
 
     /// track flows and VNI (tunnels)
-    #[arg(long, requires ="full_parse")]
+    #[arg(long, requires = "full_parse")]
     flow_tracker: bool,
 
     /// print statistics at the end
@@ -92,8 +96,8 @@ impl Timestamped for Flow {
 }
 
 struct FlowTracker {
-    v4: Tracker<FlowKeyV4, Flow>,
-    v6: Tracker<FlowKeyV6, Flow>,
+    v4: Tracker<Symmetric<FlowKeyV4>, Flow>,
+    v6: Tracker<Symmetric<FlowKeyV6>, Flow>,
     vni_mapper: VniMapper,
 }
 
@@ -108,7 +112,12 @@ impl FlowTracker {
 }
 
 /// Process PCAP file packet by packet
-fn process_pcap(pcap_path: &PathBuf, args: &Args, stats: &stats::Stats, flow_tracker: &mut FlowTracker) -> Result<(), String> {
+fn process_pcap(
+    pcap_path: &PathBuf,
+    args: &Args,
+    stats: &stats::Stats,
+    flow_tracker: &mut FlowTracker,
+) -> Result<(), String> {
     // Create thread-local stats for high-performance counting
     let mut local_stats = stats::LocalStats::new();
 

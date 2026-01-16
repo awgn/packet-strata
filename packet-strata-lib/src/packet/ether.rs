@@ -91,7 +91,20 @@ const ETH_DATA_LEN: usize = 1500; // Maximum Ethernet payload length
 const ETH_FRAME_LEN: usize = 1514; // Maximum Ethernet frame length without FCS
 const VLAN_TAG_LEN: usize = 4; // VLAN tag length
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, IntoBytes, Immutable, KnownLayout)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    FromBytes,
+    IntoBytes,
+    Immutable,
+    KnownLayout,
+)]
 pub struct EthAddr([u8; ETH_ALEN]);
 
 impl Display for EthAddr {

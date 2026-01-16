@@ -1,10 +1,14 @@
 use smallvec::SmallVec;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-use crate::packet::protocol::IpProto;
+use crate::packet::ether::EthAddr;
+use crate::packet::protocol::{EtherProto, IpProto};
 use crate::{
-    packet::{header::NetworkLayer, Packet},
+    packet::{
+        header::{LinkLayer, NetworkLayer},
+        Packet,
+    },
     tracker::vni::{VniId, VniLayer, VniMapper, VNI_NULL},
 };
 
@@ -13,9 +17,20 @@ use crate::{
 /// This trait defines the interface for creating flow keys from packets.
 /// Different implementations can create keys with different granularities
 /// (e.g., 5-tuple with VNI, 3-tuple, MAC-based, etc.)
-pub trait FlowKey: Sized + Hash + Eq + Clone {
+pub trait FlowKey: Sized + Hash + Eq + Clone + Copy {
     /// Create a new flow key from a packet
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self>;
+
+    /// Flip the source and destination fields of the flow key
+    fn flip(&self) -> Self;
+
+    /// Hashes the key in a canonical (symmetric) way without creating a new instance.
+    /// Used by `Symmetric` wrapper to ensure `Hash(A->B) == Hash(B->A)`.
+    fn hash_canonical<H: Hasher>(&self, state: &mut H);
+
+    /// Checks equality in a canonical (symmetric) way without creating a new instance.
+    /// Used by `Symmetric` wrapper to ensure `Eq(A->B, B->A)`.
+    fn eq_canonical(&self, other: &Self) -> bool;
 }
 
 /// Helper function to extract VNI from packet tunnels
@@ -44,9 +59,33 @@ fn extract_vni(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<VniId> {
 /// Returns (src_port, dst_port) or (0, 0) if no transport layer is present.
 #[inline]
 fn extract_ports(pkt: &Packet<'_>) -> (u16, u16) {
-    pkt.transport()
-        .map(|t| t.ports())
-        .unwrap_or((0, 0))
+    pkt.transport().map(|t| t.ports()).unwrap_or((0, 0))
+}
+
+#[derive(Debug, Copy, Clone)]
+#[repr(transparent)]
+pub struct Symmetric<F: FlowKey>(pub F);
+
+impl<K: FlowKey> PartialEq for Symmetric<K> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq_canonical(&other.0)
+    }
+}
+
+impl<K: FlowKey> Eq for Symmetric<K> {}
+
+impl<K: FlowKey> Hash for Symmetric<K> {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash_canonical(state);
+    }
+}
+
+impl<K: FlowKey> From<K> for Symmetric<K> {
+    fn from(k: K) -> Self {
+        Self(k)
+    }
 }
 
 /// IPv4 5-tuple flow key with VNI support
@@ -97,6 +136,57 @@ impl FlowKey for FlowKeyV4 {
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
         Self::new(pkt, vni_mapper)
     }
+
+    #[inline]
+    fn flip(&self) -> Self {
+        Self {
+            src_ip: self.dst_ip,
+            dst_ip: self.src_ip,
+            src_port: self.dst_port,
+            dst_port: self.src_port,
+            protocol: self.protocol,
+            vni: self.vni,
+        }
+    }
+
+    #[inline]
+    fn hash_canonical<H: Hasher>(&self, state: &mut H) {
+        // Hash invariant fields
+        self.protocol.hash(state);
+        self.vni.hash(state);
+
+        // Hash variant fields in sorted order (src < dst)
+        // This avoids creating a new struct or flipping
+        if (self.src_ip, self.src_port) <= (self.dst_ip, self.dst_port) {
+            self.src_ip.hash(state);
+            self.src_port.hash(state);
+            self.dst_ip.hash(state);
+            self.dst_port.hash(state);
+        } else {
+            self.dst_ip.hash(state);
+            self.dst_port.hash(state);
+            self.src_ip.hash(state);
+            self.src_port.hash(state);
+        }
+    }
+
+    #[inline]
+    fn eq_canonical(&self, other: &Self) -> bool {
+        if self.protocol != other.protocol || self.vni != other.vni {
+            return false;
+        }
+
+        // Check direct equality OR crossed equality
+        // This is much cheaper than constructing a new struct
+        (self.src_ip == other.src_ip
+            && self.dst_ip == other.dst_ip
+            && self.src_port == other.src_port
+            && self.dst_port == other.dst_port)
+            || (self.src_ip == other.dst_ip
+                && self.dst_ip == other.src_ip
+                && self.src_port == other.dst_port
+                && self.dst_port == other.src_port)
+    }
 }
 
 /// IPv6 5-tuple flow key with VNI support
@@ -146,5 +236,115 @@ impl FlowKey for FlowKeyV6 {
     #[inline]
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
         Self::new(pkt, vni_mapper)
+    }
+
+    #[inline]
+    fn flip(&self) -> Self {
+        Self {
+            src_ip: self.dst_ip,
+            dst_ip: self.src_ip,
+            src_port: self.dst_port,
+            dst_port: self.src_port,
+            protocol: self.protocol,
+            vni: self.vni,
+        }
+    }
+
+    #[inline]
+    fn hash_canonical<H: Hasher>(&self, state: &mut H) {
+        self.protocol.hash(state);
+        self.vni.hash(state);
+
+        if (self.src_ip, self.src_port) <= (self.dst_ip, self.dst_port) {
+            self.src_ip.hash(state);
+            self.src_port.hash(state);
+            self.dst_ip.hash(state);
+            self.dst_port.hash(state);
+        } else {
+            self.dst_ip.hash(state);
+            self.dst_port.hash(state);
+            self.src_ip.hash(state);
+            self.src_port.hash(state);
+        }
+    }
+
+    #[inline]
+    fn eq_canonical(&self, other: &Self) -> bool {
+        if self.protocol != other.protocol || self.vni != other.vni {
+            return false;
+        }
+
+        (self.src_ip == other.src_ip
+            && self.dst_ip == other.dst_ip
+            && self.src_port == other.src_port
+            && self.dst_port == other.dst_port)
+            || (self.src_ip == other.dst_ip
+                && self.dst_ip == other.src_ip
+                && self.src_port == other.dst_port
+                && self.dst_port == other.src_port)
+    }
+}
+
+#[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
+pub struct FlowKeyEther {
+    pub src: EthAddr,
+    pub dst: EthAddr,
+    pub protocol: EtherProto,
+}
+
+impl FlowKeyEther {
+    /// Create a new Ethernet flow key from a packet
+    ///
+    /// Returns `None` if the packet is not Ethernet.
+    pub fn new(pkt: &Packet<'_>) -> Option<Self> {
+        let LinkLayer::Ethernet(eth) = pkt.link() else {
+            return None;
+        };
+
+        Some(Self {
+            src: *eth.source(),
+            dst: *eth.dest(),
+            protocol: eth.inner_type(),
+        })
+    }
+}
+
+impl FlowKey for FlowKeyEther {
+    #[inline]
+    fn from_packet(pkt: &Packet<'_>, _vni_mapper: &mut VniMapper) -> Option<Self> {
+        Self::new(pkt)
+    }
+
+    #[inline]
+    fn flip(&self) -> Self {
+        Self {
+            src: self.dst,
+            dst: self.src,
+            protocol: self.protocol,
+        }
+    }
+
+    #[inline]
+    fn hash_canonical<H: Hasher>(&self, state: &mut H) {
+        self.protocol.hash(state);
+
+        // EthAddr implements Ord so we can compare directly
+        if self.src <= self.dst {
+            self.src.hash(state);
+            self.dst.hash(state);
+        } else {
+            self.dst.hash(state);
+            self.src.hash(state);
+        }
+    }
+
+    #[inline]
+    fn eq_canonical(&self, other: &Self) -> bool {
+        if self.protocol != other.protocol {
+            return false;
+        }
+
+        (self.src == other.src && self.dst == other.dst)
+            || (self.src == other.dst && self.dst == other.src)
     }
 }

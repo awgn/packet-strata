@@ -380,7 +380,7 @@ impl PortLayer for &UdpHeader {
     }
 }
 
-impl PortLayer for &SctpHeader{
+impl PortLayer for &SctpHeader {
     #[inline]
     fn ports(&self) -> (u16, u16) {
         (self.src_port(), self.dst_port())
