@@ -293,6 +293,17 @@ where
     T: Default + Clone + Tuple + Sized,
     D: Default,
 {
+    /// Creates a new `Flow` instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The timestamp of the first packet in the flow.
+    /// * `tuple` - The flow tuple that identifies this connection (canonical direction).
+    /// * `pkt` - The initial packet that triggered flow creation.
+    /// * `dir` - The direction of the initial packet (`Upwards` or `Downwards`).
+    ///
+    /// The source and destination MAC addresses and the tuple orientation are automatically
+    /// adjusted based on the packet direction to ensure a consistent flow representation.
     pub fn new(timestamp: Timestamp, tuple: T, pkt: &Packet<'_>, dir: PacketDirection) -> Self {
         let upwards = matches!(dir, PacketDirection::Upwards);
         Self {

@@ -26,6 +26,14 @@ impl fmt::Display for PacketDirection {
 }
 
 impl PacketDirection {
+    /// Infers the direction of a packet based on transport layer information.
+    ///
+    /// This method determines if a packet is `Upwards` (Client -> Server) or `Downwards` (Server -> Client) using:
+    /// - **TCP**: Analysis of SYN/SYN-ACK flags and well-known ports.
+    /// - **UDP**: Well-known ports (DNS, DHCP, NTP) and lightweight payload inspection (DPI Lite).
+    /// - **ICMP**: Message types (e.g., Echo Request vs Echo Reply).
+    ///
+    /// If the direction cannot be definitively determined, it defaults to `Upwards`.
     pub fn infer(pkt: &Packet<'_>) -> PacketDirection {
         let transport = pkt.transport();
         match transport {
