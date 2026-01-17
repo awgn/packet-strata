@@ -1,15 +1,12 @@
 use clap::Parser;
 use packet_strata::{
-    timestamp::Timestamp,
     tracker::{
-        flow_key::{FlowKeyV4, FlowKeyV6, Symmetric},
-        vni::VniMapper,
-        Timestamped, Tracker,
+        Tracker, flow::Flow, flow_tuple::{TupleV4, TupleV6, Symmetric}, vni::VniMapper
     },
 };
 use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::*;
-use std::fs::File;
+use std::{fs::File};
 use std::path::PathBuf;
 use tracing::{error, info};
 
@@ -76,27 +73,9 @@ fn main() {
     info!("PCAP processing completed!");
 }
 
-struct Flow {
-    timestamp: Timestamp,
-    counter: u64,
-}
-
-impl Timestamped for Flow {
-    type Timestamp = Timestamp;
-    #[inline]
-    fn timestamp(&self) -> &Self::Timestamp {
-        &self.timestamp
-    }
-
-    #[inline]
-    fn set_timestamp(&mut self, ts: Self::Timestamp) {
-        self.timestamp = ts;
-    }
-}
-
 struct FlowTracker {
-    v4: Tracker<Symmetric<FlowKeyV4>, Flow>,
-    v6: Tracker<Symmetric<FlowKeyV6>, Flow>,
+    v4: Tracker<Symmetric<TupleV4>, Flow<TupleV4, ()>>,
+    v6: Tracker<Symmetric<TupleV6>, Flow<TupleV6, ()>>,
     vni_mapper: VniMapper,
 }
 

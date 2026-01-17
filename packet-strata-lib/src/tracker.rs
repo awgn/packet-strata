@@ -2,27 +2,27 @@ use ahash::RandomState;
 use hashlink::LinkedHashMap;
 
 pub mod flow;
-pub mod flow_key;
+pub mod flow_tuple;
 pub mod vni;
 
 /// Trait for types that have an intrinsic timestamp
-pub trait Timestamped {
+pub trait Trackable {
     type Timestamp: PartialOrd + Clone;
 
-    fn timestamp(&self) -> &Self::Timestamp;
+    fn timestamp(&self) -> Self::Timestamp;
     fn set_timestamp(&mut self, ts: Self::Timestamp);
 }
 
 /// Flow tracker for types that have an intrinsic timestamp (via Timestamped trait)
 /// This avoids timestamp duplication in memory.
-pub struct Tracker<K, V: Timestamped> {
+pub struct Tracker<K, V: Trackable> {
     lru: LinkedHashMap<K, V, RandomState>,
 }
 
 impl<K, V> Tracker<K, V>
 where
     K: Eq + std::hash::Hash + Clone,
-    V: Timestamped,
+    V: Trackable,
 {
     #[inline]
     pub fn new() -> Self {
@@ -100,7 +100,7 @@ where
 
     /// Get the timestamp of an entry
     #[inline]
-    pub fn get_timestamp(&self, key: &K) -> Option<&V::Timestamp> {
+    pub fn get_timestamp(&self, key: &K) -> Option<V::Timestamp> {
         self.lru.get(key).map(|v| v.timestamp())
     }
 
@@ -165,7 +165,7 @@ mod tests {
         packets: u32,
     }
 
-    impl Timestamped for FlowData {
+    impl Trackable for FlowData {
         type Timestamp = u64;
 
         fn timestamp(&self) -> &u64 {

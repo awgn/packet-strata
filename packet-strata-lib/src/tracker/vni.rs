@@ -501,10 +501,8 @@ impl TryFrom<&Packet<'_>> for SmallVec<[VniLayer; 4]> {
 ///
 /// This is an opaque identifier used to reference a specific VNI layer stack
 /// in the mapper. The actual value has no semantic meaning outside of the mapper.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct VniId(u32);
-
-pub const VNI_NULL: VniId = VniId(0);
 
 impl VniId {
     /// Get the raw u32 value (primarily for debugging/serialization)

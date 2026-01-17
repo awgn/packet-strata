@@ -107,6 +107,12 @@ const VLAN_TAG_LEN: usize = 4; // VLAN tag length
 )]
 pub struct EthAddr([u8; ETH_ALEN]);
 
+impl Default for EthAddr {
+    fn default() -> Self {
+        EthAddr([0u8; ETH_ALEN])
+    }
+}
+
 impl Display for EthAddr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(

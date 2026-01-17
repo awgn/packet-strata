@@ -9,7 +9,7 @@ use crate::{
         header::{LinkLayer, NetworkLayer},
         Packet,
     },
-    tracker::vni::{VniId, VniLayer, VniMapper, VNI_NULL},
+    tracker::vni::{VniId, VniLayer, VniMapper},
 };
 
 /// Common trait for all flow key types
@@ -42,7 +42,7 @@ fn extract_vni(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<VniId> {
     let network_tunnel_layers = pkt.tunnels();
 
     if network_tunnel_layers.is_empty() {
-        return Some(VNI_NULL);
+        return Some(VniId::default());
     }
 
     let vni_stack = network_tunnel_layers
@@ -96,7 +96,7 @@ impl<K: FlowKey> From<K> for Symmetric<K> {
 /// - IP protocol number
 /// - Virtual Network Identifier (VNI) for tunnel-aware flow tracking
 #[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
-pub struct FlowKeyV4 {
+pub struct TupleV4 {
     pub src_ip: Ipv4Addr,
     pub dst_ip: Ipv4Addr,
     pub src_port: u16,
@@ -105,7 +105,20 @@ pub struct FlowKeyV4 {
     pub vni: VniId,
 }
 
-impl FlowKeyV4 {
+impl Default for TupleV4 {
+    fn default() -> Self {
+        Self {
+            src_ip: Ipv4Addr::UNSPECIFIED,
+            dst_ip: Ipv4Addr::UNSPECIFIED,
+            src_port: 0,
+            dst_port: 0,
+            protocol: IpProto::default(),
+            vni: VniId::default(),
+        }
+    }
+}
+
+impl TupleV4 {
     /// Create a new IPv4 flow key from a packet
     ///
     /// Returns `None` if the packet does not contain an IPv4 header or if VNI extraction fails.
@@ -131,7 +144,7 @@ impl FlowKeyV4 {
     }
 }
 
-impl FlowKey for FlowKeyV4 {
+impl FlowKey for TupleV4 {
     #[inline]
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
         Self::new(pkt, vni_mapper)
@@ -197,7 +210,7 @@ impl FlowKey for FlowKeyV4 {
 /// - IP protocol number (next header)
 /// - Virtual Network Identifier (VNI) for tunnel-aware flow tracking
 #[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
-pub struct FlowKeyV6 {
+pub struct TupleV6 {
     pub src_ip: Ipv6Addr,
     pub dst_ip: Ipv6Addr,
     pub src_port: u16,
@@ -206,7 +219,20 @@ pub struct FlowKeyV6 {
     pub vni: VniId,
 }
 
-impl FlowKeyV6 {
+impl Default for TupleV6 {
+    fn default() -> Self {
+        Self {
+            src_ip: Ipv6Addr::UNSPECIFIED,
+            dst_ip: Ipv6Addr::UNSPECIFIED,
+            src_port: 0,
+            dst_port: 0,
+            protocol: IpProto::default(),
+            vni: VniId::default(),
+        }
+    }
+}
+
+impl TupleV6 {
     /// Create a new IPv6 flow key from a packet
     ///
     /// Returns `None` if the packet does not contain an IPv6 header or if VNI extraction fails.
@@ -232,7 +258,7 @@ impl FlowKeyV6 {
     }
 }
 
-impl FlowKey for FlowKeyV6 {
+impl FlowKey for TupleV6 {
     #[inline]
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
         Self::new(pkt, vni_mapper)
@@ -286,13 +312,23 @@ impl FlowKey for FlowKeyV6 {
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
-pub struct FlowKeyEther {
+pub struct TupleEth {
     pub src: EthAddr,
     pub dst: EthAddr,
     pub protocol: EtherProto,
 }
 
-impl FlowKeyEther {
+impl Default for TupleEth {
+    fn default() -> Self {
+        Self {
+            src: EthAddr::default(),
+            dst: EthAddr::default(),
+            protocol: EtherProto::default(),
+        }
+    }
+}
+
+impl TupleEth {
     /// Create a new Ethernet flow key from a packet
     ///
     /// Returns `None` if the packet is not Ethernet.
@@ -309,7 +345,7 @@ impl FlowKeyEther {
     }
 }
 
-impl FlowKey for FlowKeyEther {
+impl FlowKey for TupleEth {
     #[inline]
     fn from_packet(pkt: &Packet<'_>, _vni_mapper: &mut VniMapper) -> Option<Self> {
         Self::new(pkt)

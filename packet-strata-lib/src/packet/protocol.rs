@@ -42,6 +42,12 @@ use zerocopy::{BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, U16};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, IntoBytes, Immutable, KnownLayout)]
 pub struct EtherProto(pub U16<BigEndian>);
 
+impl Default for EtherProto {
+    fn default() -> Self {
+        EtherProto::IPV4
+    }
+}
+
 impl EtherProto {
     // DIX Ethernet Protocol Types
     pub const LOOP: EtherProto = EtherProto(U16::new(0x0060)); /* Ethernet Loopback packet */
@@ -239,6 +245,12 @@ impl From<EtherProto> for u16 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, IntoBytes, Immutable, KnownLayout)]
 #[repr(transparent)]
 pub struct IpProto(pub u8);
+
+impl Default for IpProto {
+    fn default() -> Self {
+        IpProto::ANY
+    }
+}
 
 impl IpProto {
     /// Check if this protocol number is a known/valid protocol

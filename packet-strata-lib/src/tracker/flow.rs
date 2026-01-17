@@ -1,15 +1,14 @@
-use std::fmt::Display;
+use std::{
+    fmt::Display,
+    net::{Ipv4Addr, Ipv6Addr},
+};
 
 use chrono::TimeDelta;
 
 use crate::{
-    packet::{
-        ether::EthAddr,
-        icmp::IcmpType,
-        protocol::{EtherProto, IpProto},
-    },
+    packet::{ether::EthAddr, icmp::IcmpType, protocol::EtherProto},
     timestamp::Timestamp,
-    tracker::vni::VniId,
+    tracker::Trackable,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -44,9 +43,10 @@ pub enum TcpState {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Termination {
     /// Normal TCP shutdown (FIN exchange observed).
+    #[default]
     Close,
 
     /// Connection reset (RST flag observed).
@@ -215,83 +215,83 @@ pub struct TcpInfo {
     state: TcpState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FlowIp<IP, T> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Flow<Tuple, T> {
     /// Flow classification (Uplink, Downlink, etc.).
-    r#type: FlowType,
+    pub r#type: FlowType,
 
     /// Reason for flow termination.
-    termination: Termination,
+    pub termination: Termination,
 
     /// IP layer statistics and info.
-    ip_info: IpInfo,
+    pub ip_info: Option<IpInfo>,
 
     /// TCP layer statistics and info (optional).
-    tcp_info: Option<TcpInfo>,
+    pub tcp_info: Option<TcpInfo>,
 
     /// Timestamp of the first packet in the flow.
-    ts_start: Timestamp,
+    pub start_ts: Timestamp,
 
     /// Timestamp of the last packet in the flow.
-    ts_last: Timestamp,
+    pub end_ts: Timestamp,
 
     /// Source MAC address.
-    src_mac: EthAddr,
+    pub src_mac: EthAddr,
 
     /// Destination MAC address.
-    dst_mac: EthAddr,
+    pub dst_mac: EthAddr,
 
     /// Ethernet protocol.
-    eth_proto: EtherProto,
+    pub eth_proto: EtherProto,
 
-    /// Source IP address.
-    src_addr: IP,
-
-    /// Destination IP address.
-    dst_addr: IP,
-
-    /// IP protocol (TCP, UDP, etc.).
-    ip_proto: IpProto,
-
-    /// Source port (if applicable).
-    src_port: u16,
-
-    /// Destination port (if applicable).
-    dst_port: u16,
-
-    /// Virtual Network Identifier (if applicable).
-    vni: VniId,
+    /// Generic address tuple (e.g. TupleV4, TupleV6 or TupleL2)
+    pub addr: Tuple,
 
     /// Total uplink bytes.
-    u_bytes: usize,
+    pub u_bytes: usize,
 
     /// Total downlink bytes.
-    d_bytes: usize,
+    pub d_bytes: usize,
 
     /// Total uplink payload bytes.
-    u_payload_bytes: usize,
+    pub u_payload_bytes: usize,
 
     /// Total downlink payload bytes.
-    d_payload_bytes: usize,
+    pub d_payload_bytes: usize,
 
     /// Total uplink packets.
-    u_pkts: u32,
+    pub u_pkts: u32,
 
     /// Total downlink packets.
-    d_pkts: u32,
+    pub d_pkts: u32,
 
     /// Uplink packets with payload.
-    u_payload_pkts: u32,
+    pub u_payload_pkts: u32,
 
     /// Downlink packets with payload.
-    d_payload_pkts: u32,
+    pub d_payload_pkts: u32,
 
     /// Uplink fragments count.
-    u_frags: u32,
+    pub u_frags: u32,
 
     /// Downlink fragments count.
-    d_frags: u32,
+    pub d_frags: u32,
 
     /// Custom data associated with the flow.
-    data: T,
+    pub data: T,
 }
+
+impl<A, T> Trackable for Flow<A, T> {
+    type Timestamp = Timestamp;
+
+    fn timestamp(&self) -> Timestamp {
+        self.start_ts
+    }
+
+    fn set_timestamp(&mut self, ts: Self::Timestamp) {
+        self.end_ts = ts;
+    }
+}
+
+pub type FlowIpV4<T> = Flow<Ipv4Addr, T>;
+pub type FlowIpV6<T> = Flow<Ipv6Addr, T>;

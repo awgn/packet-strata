@@ -1,7 +1,7 @@
 use std::fmt;
 use chrono::DateTime;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Timestamp(pub u64);
 
 impl fmt::Display for Timestamp {

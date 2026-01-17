@@ -1,13 +1,14 @@
+
 use packet_strata::packet::header::{LinkLayer, NetworkLayer, TransportLayer, TunnelLayer};
 use packet_strata::packet::iter::{Header, LinkType, PacketIter};
 use packet_strata::packet::tunnel::ipip::IpipType;
 use packet_strata::packet::{Packet, ParseMode};
-use packet_strata::timestamp::Timestamp;
-use packet_strata::tracker::flow_key::{FlowKeyV4, FlowKeyV6, Symmetric};
+use packet_strata::tracker::flow::Flow;
+use packet_strata::tracker::flow_tuple::{TupleV4, TupleV6, Symmetric};
 
 use crate::packet_metadata::PacketMetadata;
 use crate::stats::{LocalStats, Stats, FLUSH_INTERVAL};
-use crate::{Args, Flow, FlowTracker};
+use crate::{Args, FlowTracker};
 
 /// Process a single packet using the PacketIter iterator
 ///
@@ -199,38 +200,44 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
                     NetworkLayer::Ipv4(_) => {
                         local_stats.ipv4 += 1;
                         if args.flow_tracker {
-                            if let Some(key) = FlowKeyV4::new(&packet, &mut flow_tracker.vni_mapper)
+                            if let Some(tuple) = TupleV4::new(&packet, &mut flow_tracker.vni_mapper)
                             {
                                 let flow = flow_tracker.v4.get_or_insert_with(
-                                    &Symmetric(key),
-                                    || -> Flow {
+                                    &Symmetric(tuple),
+                                    || -> Flow<TupleV4, ()> {
+                                        let now = pkt.timestamp();
                                         Flow {
-                                            timestamp: Timestamp(0),
-                                            counter: 0,
+                                            start_ts: now,
+                                            end_ts: now,
+                                            addr: tuple,
+                                            .. Flow::default()
                                         }
                                     },
                                 );
-                                flow.counter += 1;
-                                flow.timestamp = pkt.timestamp();
+
+                                flow.end_ts = pkt.timestamp();
                             }
                         }
                     }
                     NetworkLayer::Ipv6(_) => {
                         local_stats.ipv6 += 1;
                         if args.flow_tracker {
-                            if let Some(key) = FlowKeyV6::new(&packet, &mut flow_tracker.vni_mapper)
+                            if let Some(tuple) = TupleV6::new(&packet, &mut flow_tracker.vni_mapper)
                             {
                                 let flow = flow_tracker.v6.get_or_insert_with(
-                                    &Symmetric(key),
-                                    || -> Flow {
+                                    &Symmetric(tuple),
+                                    || -> Flow<TupleV6,()> {
+                                        let now = pkt.timestamp();
                                         Flow {
-                                            timestamp: Timestamp(0),
-                                            counter: 0,
+                                            start_ts: now,
+                                            end_ts: now,
+                                            addr: tuple,
+                                            .. Flow::default()
                                         }
                                     },
                                 );
-                                flow.counter += 1;
-                                flow.timestamp = pkt.timestamp();
+
+                                flow.end_ts = pkt.timestamp();
                             }
                         }
                     }
