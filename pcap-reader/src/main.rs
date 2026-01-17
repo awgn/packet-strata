@@ -1,18 +1,17 @@
-use ahash::RandomState;
 use clap::Parser;
-use hashlink::LinkedHashMap;
-use packet_strata::tracker::{
-    flow_key::{FlowKeyV4, FlowKeyV6, Symmetric},
-    vni::VniMapper,
-    Timestamped, Tracker,
+use packet_strata::{
+    timestamp::Timestamp,
+    tracker::{
+        flow_key::{FlowKeyV4, FlowKeyV6, Symmetric},
+        vni::VniMapper,
+        Timestamped, Tracker,
+    },
 };
 use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::*;
 use std::fs::File;
 use std::path::PathBuf;
 use tracing::{error, info};
-
-use crate::packet_metadata::TimestampNsec;
 
 mod packet_metadata;
 mod process;
@@ -78,12 +77,12 @@ fn main() {
 }
 
 struct Flow {
-    timestamp: TimestampNsec,
+    timestamp: Timestamp,
     counter: u64,
 }
 
 impl Timestamped for Flow {
-    type Timestamp = TimestampNsec;
+    type Timestamp = Timestamp;
     #[inline]
     fn timestamp(&self) -> &Self::Timestamp {
         &self.timestamp

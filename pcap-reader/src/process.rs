@@ -2,9 +2,10 @@ use packet_strata::packet::header::{LinkLayer, NetworkLayer, TransportLayer, Tun
 use packet_strata::packet::iter::{Header, LinkType, PacketIter};
 use packet_strata::packet::tunnel::ipip::IpipType;
 use packet_strata::packet::{Packet, ParseMode};
+use packet_strata::timestamp::Timestamp;
 use packet_strata::tracker::flow_key::{FlowKeyV4, FlowKeyV6, Symmetric};
 
-use crate::packet_metadata::{PacketMetadata, TimestampNsec};
+use crate::packet_metadata::PacketMetadata;
 use crate::stats::{LocalStats, Stats, FLUSH_INTERVAL};
 use crate::{Args, Flow, FlowTracker};
 
@@ -204,7 +205,7 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
                                     &Symmetric(key),
                                     || -> Flow {
                                         Flow {
-                                            timestamp: TimestampNsec(0),
+                                            timestamp: Timestamp(0),
                                             counter: 0,
                                         }
                                     },
@@ -223,7 +224,7 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
                                     &Symmetric(key),
                                     || -> Flow {
                                         Flow {
-                                            timestamp: TimestampNsec(0),
+                                            timestamp: Timestamp(0),
                                             counter: 0,
                                         }
                                     },
