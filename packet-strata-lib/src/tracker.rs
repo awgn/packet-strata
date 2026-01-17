@@ -2,21 +2,19 @@ use ahash::RandomState;
 use hashlink::LinkedHashMap;
 
 pub mod direction;
-pub mod process;
 pub mod flow;
+pub mod process;
 pub mod tuple;
 pub mod vni;
 
 /// Trait for types that have an intrinsic timestamp
 pub trait Trackable {
     type Timestamp: PartialOrd + Clone;
-
     fn timestamp(&self) -> Self::Timestamp;
     fn set_timestamp(&mut self, ts: Self::Timestamp);
 }
 
-/// Flow tracker for types that have an intrinsic timestamp (via Timestamped trait)
-/// This avoids timestamp duplication in memory.
+/// Flow tracker for types that have an intrinsic timestamp (via Trackable trait)
 pub struct Tracker<K, V: Trackable> {
     lru: LinkedHashMap<K, V, RandomState>,
 }

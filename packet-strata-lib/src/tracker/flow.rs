@@ -7,9 +7,16 @@ use chrono::TimeDelta;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    metadata::PacketMetadata, packet::{
-        Packet, ether::EthAddr, icmp::IcmpType, protocol::EtherProto
-    }, timestamp::Timestamp, tracker::{Trackable, direction::PacketDirection, tuple::Tuple, process::Process}
+    metadata::PacketMetadata,
+    packet::{
+        ether::EthAddr,
+        header::{NetworkLayer, SourceDestLayer},
+        icmp::IcmpType,
+        protocol::EtherProto,
+        Packet,
+    },
+    timestamp::Timestamp,
+    tracker::{direction::PacketDirection, process::Process, tuple::Tuple, Trackable},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -291,6 +298,8 @@ pub struct Flow<T, D> {
 impl<T, D> Flow<T, D>
 where
     T: Default + Clone + Tuple + Sized,
+    for<'a> NetworkLayer<'a>: SourceDestLayer<T::Addr>,
+    T::Addr: Eq,
     D: Default,
 {
     /// Creates a new `Flow` instance.
@@ -309,22 +318,72 @@ where
         Self {
             start_ts: timestamp,
             last_ts: timestamp,
-            src_mac: if upwards { pkt.link().source() } else { pkt.link().dest() },
-            dst_mac: if upwards { pkt.link().dest() } else { pkt.link().source() },
+            src_mac: if upwards {
+                pkt.link().source()
+            } else {
+                pkt.link().dest()
+            },
+            dst_mac: if upwards {
+                pkt.link().dest()
+            } else {
+                pkt.link().source()
+            },
             eth_proto: pkt.link().protocol(),
             tuple: if upwards { tuple } else { tuple.flip() },
             ..Default::default()
         }
     }
+
+    /// Determines the direction of a packet relative to the flow.
+    ///
+    /// # Arguments
+    ///
+    /// * `pkt` - The packet to analyze for direction determination.
+    ///
+    /// A packet is considered "upwards" if both its source address and source port
+    /// match the flow's source tuple. Otherwise, it's considered "downwards".
+    /// This method is essential for tracking bidirectional communication within
+    /// a single flow instance.
+    #[inline]
+    pub fn packet_dir(&self, pkt: &Packet<'_>) -> PacketDirection {
+        if self.tuple.is_symmetric() {
+            // to disguise a very loopback packet (e.g. icmp localhost),
+            // we need to infer the direction from the packet itself
+            return PacketDirection::infer(pkt);
+        }
+
+        // Check if packet source address matches flow source address
+        let is_upwards_addr = pkt
+            .network()
+            .and_then(|net| SourceDestLayer::<T::Addr>::source(net))
+            .is_some_and(|src| src == self.tuple.source());
+        // Check if packet source port matches flow source port
+        let is_upwards_port = pkt
+            .transport()
+            .and_then(|tr| SourceDestLayer::<u16>::source(tr))
+            .is_some_and(|src| src == self.tuple.source_port());
+
+        // Packet is upwards if both address and port match flow source
+        if is_upwards_addr && is_upwards_port {
+            PacketDirection::Upwards
+        } else {
+            PacketDirection::Downwards
+        }
+    }
 }
 
 impl<A, T> Process for Flow<A, T>
-    where T: Process,
+where
+    T: Process,
 {
-    fn process<Meta: PacketMetadata>(&mut self, meta: &Meta, pkt: &Packet<'_>) {
+    fn process<Meta: PacketMetadata>(
+        &mut self,
+        meta: &Meta,
+        pkt: &Packet<'_>,
+        dir: PacketDirection,
+    ) {
         self.last_ts = meta.timestamp();
-        let uplink = true;
-        if uplink {
+        if matches!(dir, PacketDirection::Upwards) {
             self.u_bytes += meta.caplen() as usize;
             self.u_pkts += 1;
             self.u_payload_bytes += pkt.data().len();
@@ -336,7 +395,7 @@ impl<A, T> Process for Flow<A, T>
             self.d_payload_pkts += (!pkt.data().is_empty()) as u32;
         }
 
-        self.data.process(meta, pkt);
+        self.data.process(meta, pkt, dir);
     }
 }
 

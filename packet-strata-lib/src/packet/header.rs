@@ -3,6 +3,8 @@
 //! This module provides the [`Header`] enum which wraps all supported protocol headers
 //! and [`UnknownProto`] for representing unknown/unsupported protocols.
 
+use std::net::{Ipv4Addr, Ipv6Addr};
+
 use crate::packet::ether::EthAddr;
 
 use super::arp::ArpHeaderFull;
@@ -367,6 +369,114 @@ impl std::fmt::Display for NetworkLayer<'_> {
     }
 }
 
+/// Trait for extracting source and destination fields from packet headers.
+///
+/// This trait provides a generic interface for accessing source and destination
+/// information from different types of network headers, regardless of whether
+/// they contain IP addresses, ports, or other address types.
+///
+/// # Type Parameters
+/// * `T` - The type of address/port information to extract (e.g., Ipv4Addr, Ipv6Addr, u16)
+pub trait SourceDestLayer<T> {
+    /// Extracts the source address/port from the header.
+    ///
+    /// Returns `None` if the header doesn't contain source information
+    /// or if the source field is not applicable for this header type.
+    fn source(&self) -> Option<T>;
+
+    /// Extracts the destination address/port from the header.
+    ///
+    /// Returns `None` if the header doesn't contain destination information
+    /// or if the destination field is not applicable for this header type.
+    fn dest(&self) -> Option<T>;
+}
+
+impl SourceDestLayer<EthAddr> for LinkLayer<'_> {
+    /// Extracts the source Ethernet MAC address from the link layer header.
+    ///
+    /// Returns the source MAC address if this is an Ethernet header,
+    /// otherwise returns `None` for other link layer types (SLL, SLLv2, NULL).
+    ///
+    /// # Returns
+    /// * `Some(EthAddr)` - The source MAC address for Ethernet frames
+    /// * `None` - No MAC address available for non-Ethernet link layers
+    #[inline]
+    fn source(&self) -> Option<EthAddr> {
+        match self {
+            LinkLayer::Ethernet(h) => Some(*h.source()),
+            _ => None,
+        }
+    }
+
+    /// Extracts the destination Ethernet MAC address from the link layer header.
+    ///
+    /// Returns the destination MAC address if this is an Ethernet header,
+    /// otherwise returns `None` for other link layer types (SLL, SLLv2, NULL).
+    ///
+    /// # Returns
+    /// * `Some(EthAddr)` - The destination MAC address for Ethernet frames
+    /// * `None` - No MAC address available for non-Ethernet link layers
+    #[inline]
+    fn dest(&self) -> Option<EthAddr> {
+        match self {
+            LinkLayer::Ethernet(h) => Some(*h.dest()),
+            _ => None,
+        }
+    }
+}
+
+impl SourceDestLayer<Ipv4Addr> for NetworkLayer<'_> {
+    /// Extracts the source IPv4 address from the network layer header.
+    ///
+    /// Returns the source IPv4 address if this is an IPv4 header,
+    /// otherwise returns `None` for IPv6, MPLS, or other network layers.
+    #[inline]
+    fn source(&self) -> Option<Ipv4Addr> {
+        match self {
+            NetworkLayer::Ipv4(h) => Some(h.header.src_ip()),
+            _ => None,
+        }
+    }
+
+    /// Extracts the destination IPv4 address from the network layer header.
+    ///
+    /// Returns the destination IPv4 address if this is an IPv4 header,
+    /// otherwise returns `None` for IPv6, MPLS, or other network layers.
+    #[inline]
+    fn dest(&self) -> Option<Ipv4Addr> {
+        match self {
+            NetworkLayer::Ipv4(h) => Some(h.header.dst_ip()),
+            _ => None,
+        }
+    }
+}
+
+impl SourceDestLayer<Ipv6Addr> for NetworkLayer<'_> {
+    /// Extracts the source IPv6 address from the network layer header.
+    ///
+    /// Returns the source IPv6 address if this is an IPv6 header,
+    /// otherwise returns `None` for IPv4, MPLS, or other network layers.
+    #[inline]
+    fn source(&self) -> Option<Ipv6Addr> {
+        match self {
+            NetworkLayer::Ipv6(h) => Some(h.header.src_ip()),
+            _ => None,
+        }
+    }
+
+    /// Extracts the destination IPv6 address from the network layer header.
+    ///
+    /// Returns the destination IPv6 address if this is an IPv6 header,
+    /// otherwise returns `None` for IPv4, MPLS, or other network layers.
+    #[inline]
+    fn dest(&self) -> Option<Ipv6Addr> {
+        match self {
+            NetworkLayer::Ipv6(h) => Some(h.header.dst_ip()),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum TransportLayer<'a> {
     Tcp(TcpHeaderOpt<'a>),
@@ -377,43 +487,121 @@ pub enum TransportLayer<'a> {
 }
 
 impl TransportLayer<'_> {
+    /// Extracts the source and destination ports from the transport layer header.
+    ///
+    /// For TCP, UDP, and SCTP headers, returns the actual source and destination ports.
+    /// For ICMP and ICMPv6 headers, which don't have port numbers, returns (0, 0).
+    ///
+    /// # Returns
+    /// A tuple containing (source_port, destination_port). For protocols without
+    /// port numbers, both values will be 0.
     #[inline]
     pub fn ports(&self) -> (u16, u16) {
         match self {
-            TransportLayer::Tcp(h) => h.ports(),
-            TransportLayer::Udp(h) => h.ports(),
-            TransportLayer::Sctp(h) => h.ports(),
+            TransportLayer::Tcp(h) => {
+                (h.source().unwrap_or_default(), h.dest().unwrap_or_default())
+            }
+            TransportLayer::Udp(h) => {
+                (h.source().unwrap_or_default(), h.dest().unwrap_or_default())
+            }
+            TransportLayer::Sctp(h) => {
+                (h.source().unwrap_or_default(), h.dest().unwrap_or_default())
+            }
             TransportLayer::Icmp(_) => (0, 0),
             TransportLayer::Icmp6(_) => (0, 0),
         }
     }
 }
 
-pub trait PortLayer {
+impl SourceDestLayer<u16> for TcpHeaderOpt<'_> {
+    /// Extracts the source port from the TCP header.
+    ///
+    /// TCP headers always contain both source and destination ports,
+    /// so this method always returns `Some(port)`.
     #[inline]
-    fn ports(&self) -> (u16, u16) {
-        (0, 0)
+    fn source(&self) -> Option<u16> {
+        Some(self.header.src_port())
+    }
+
+    /// Extracts the destination port from the TCP header.
+    ///
+    /// TCP headers always contain both source and destination ports,
+    /// so this method always returns `Some(port)`.
+    #[inline]
+    fn dest(&self) -> Option<u16> {
+        Some(self.header.dst_port())
     }
 }
 
-impl PortLayer for &TcpHeaderOpt<'_> {
+impl SourceDestLayer<u16> for UdpHeader {
+    /// Extracts the source port from the UDP header.
+    ///
+    /// UDP headers always contain both source and destination ports,
+    /// so this method always returns `Some(port)`.
     #[inline]
-    fn ports(&self) -> (u16, u16) {
-        (self.header.src_port(), self.header.dst_port())
+    fn source(&self) -> Option<u16> {
+        Some(self.src_port())
+    }
+
+    /// Extracts the destination port from the UDP header.
+    ///
+    /// UDP headers always contain both source and destination ports,
+    /// so this method always returns `Some(port)`.
+    #[inline]
+    fn dest(&self) -> Option<u16> {
+        Some(self.dst_port())
     }
 }
 
-impl PortLayer for &UdpHeader {
+impl SourceDestLayer<u16> for SctpHeader {
+    /// Extracts the source port from the SCTP header.
+    ///
+    /// SCTP headers always contain both source and destination ports,
+    /// so this method always returns `Some(port)`.
     #[inline]
-    fn ports(&self) -> (u16, u16) {
-        (self.src_port(), self.dst_port())
+    fn source(&self) -> Option<u16> {
+        Some(self.src_port())
+    }
+
+    /// Extracts the destination port from the SCTP header.
+    ///
+    /// SCTP headers always contain both source and destination ports,
+    /// so this method always returns `Some(port)`.
+    #[inline]
+    fn dest(&self) -> Option<u16> {
+        Some(self.dst_port())
     }
 }
 
-impl PortLayer for &SctpHeader {
+impl SourceDestLayer<u16> for TransportLayer<'_> {
+    /// Extracts the source port from the transport layer header.
+    ///
+    /// Returns the source port for TCP, UDP, and SCTP headers.
+    /// Returns `None` for ICMP and ICMPv6 headers, which don't have port numbers.
     #[inline]
-    fn ports(&self) -> (u16, u16) {
-        (self.src_port(), self.dst_port())
+    fn source(&self) -> Option<u16> {
+        match self {
+            TransportLayer::Tcp(h) => Some(h.src_port()),
+            TransportLayer::Udp(h) => Some(h.src_port()),
+            TransportLayer::Sctp(h) => Some(h.src_port()),
+            TransportLayer::Icmp(_) => None,
+            TransportLayer::Icmp6(_) => None,
+        }
+    }
+
+    /// Extracts the destination port from the transport layer header.
+    ///
+    /// Returns the destination port for TCP, UDP, and SCTP headers.
+    /// Returns `None` for ICMP and ICMPv6 headers, which don't have port numbers.
+    #[inline]
+    fn dest(&self) -> Option<u16> {
+        match self {
+            TransportLayer::Tcp(h) => Some(h.dst_port()),
+            TransportLayer::Udp(h) => Some(h.dst_port()),
+            TransportLayer::Sctp(h) => Some(h.dst_port()),
+            TransportLayer::Icmp(_) => None,
+            TransportLayer::Icmp6(_) => None,
+        }
     }
 }
 
@@ -463,7 +651,14 @@ pub struct NetworkTunnelLayer<'a> {
 }
 
 impl<'a> NetworkTunnelLayer<'a> {
-    /// Create a new IP tunnel layer with an outer IP header
+    /// Creates a new IP tunnel layer with an outer IP header.
+    ///
+    /// This constructor is used for tunnel protocols that are encapsulated in IP,
+    /// such as VXLAN over UDP/IP, GRE over IP, or GTP over IP.
+    ///
+    /// # Arguments
+    /// * `outer` - The outer IP header (IPv4 or IPv6) that encapsulates the tunnel
+    /// * `tunnel` - The tunnel protocol layer
     #[inline]
     pub fn new(outer: NetworkLayer<'a>, tunnel: TunnelLayer<'a>) -> Self {
         Self {
@@ -472,7 +667,13 @@ impl<'a> NetworkTunnelLayer<'a> {
         }
     }
 
-    /// Create a new tunnel layer without an outer IP header (e.g., PBB)
+    /// Creates a new tunnel layer without an outer IP header.
+    ///
+    /// This constructor is used for layer 2 tunnel protocols that don't have
+    /// an outer IP header, such as PBB (MAC-in-MAC) or other layer 2 encapsulations.
+    ///
+    /// # Arguments
+    /// * `tunnel` - The tunnel protocol layer
     #[inline]
     pub fn new_l2(tunnel: TunnelLayer<'a>) -> Self {
         Self {
@@ -481,13 +682,25 @@ impl<'a> NetworkTunnelLayer<'a> {
         }
     }
 
-    /// Get the outer IP header, if present
+    /// Returns a reference to the outer IP header, if present.
+    ///
+    /// For IP-based tunnels (VXLAN, GRE, GTP, etc.), this returns the outer IP header
+    /// that encapsulates the tunnel protocol. For layer 2 tunnels like PBB, this returns `None`.
+    ///
+    /// # Returns
+    /// * `Some(&NetworkLayer)` - The outer IP header for IP-based tunnels
+    /// * `None` - No outer IP header for layer 2 tunnels
     #[inline]
     pub fn outer(&self) -> Option<&NetworkLayer<'a>> {
         self.outer.as_ref()
     }
 
-    /// Get the tunnel layer
+    /// Returns a reference to the tunnel layer.
+    ///
+    /// This provides access to the actual tunnel protocol header (VXLAN, GRE, GTP, etc.).
+    ///
+    /// # Returns
+    /// A reference to the tunnel protocol layer contained within this network tunnel.
     #[inline]
     pub fn tunnel(&self) -> &TunnelLayer<'a> {
         &self.tunnel

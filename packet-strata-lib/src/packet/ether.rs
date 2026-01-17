@@ -74,9 +74,9 @@
 #![allow(dead_code)]
 
 use core::fmt;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zerocopy::{BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, U16};
 
@@ -106,7 +106,7 @@ const VLAN_TAG_LEN: usize = 4; // VLAN tag length
     Immutable,
     KnownLayout,
     Serialize,
-    Deserialize
+    Deserialize,
 )]
 #[serde(into = "String")]
 #[serde(try_from = "String")]
@@ -137,7 +137,8 @@ pub enum EtherError {
 impl FromStr for EthAddr {
     type Err = EtherError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes: Vec<u8> = s.split(':')
+        let bytes: Vec<u8> = s
+            .split(':')
             .map(|part| u8::from_str_radix(part, 16).map_err(|_| EtherError::InvalidAddressFormat))
             .collect::<Result<Vec<u8>, _>>()?;
 

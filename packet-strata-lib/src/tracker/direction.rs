@@ -57,69 +57,63 @@ impl PacketDirection {
                 Self::infer_by_ports_and_payload_udp(udp.src_port(), udp.dst_port(), pkt.data())
             }
 
-            Some(TransportLayer::Icmp(icmp)) => {
-                match icmp.icmp_type() {
-                    IcmpType::ECHO => PacketDirection::Upwards,
-                    IcmpType::ECHO_REPLY => PacketDirection::Downwards,
-                    IcmpType::TIMESTAMP => PacketDirection::Upwards,
-                    IcmpType::TIMESTAMP_REPLY => PacketDirection::Downwards,
-                    IcmpType::INFO_REQUEST => PacketDirection::Upwards,
-                    IcmpType::INFO_REPLY => PacketDirection::Downwards,
-                    IcmpType::ADDRESS => PacketDirection::Upwards,
-                    IcmpType::ADDRESS_REPLY => PacketDirection::Downwards,
-                    IcmpType::EX_ECHO => PacketDirection::Upwards,
-                    IcmpType::EX_ECHO_REPLY => PacketDirection::Downwards,
-                    IcmpType::DEST_UNREACH => PacketDirection::Upwards,
-                    IcmpType::SOURCE_QUENCH => PacketDirection::Upwards,
-                    IcmpType::REDIRECT => PacketDirection::Upwards,
-                    IcmpType::ROUTER_ADV => PacketDirection::Downwards,
-                    IcmpType::ROUTER_SOLICIT => PacketDirection::Upwards,
-                    IcmpType::TIME_EXCEEDED => PacketDirection::Upwards,
-                    IcmpType::PARAMETER_PROBLEM => PacketDirection::Upwards,
-                    _ => PacketDirection::Upwards,
-                }
-            }
-            Some(TransportLayer::Icmp6(icmp6)) => {
-                match icmp6.icmp6_type() {
-                    Icmp6Type::DST_UNREACH => PacketDirection::Upwards,
-                    Icmp6Type::PACKET_TOO_BIG => PacketDirection::Upwards,
-                    Icmp6Type::TIME_EXCEEDED => PacketDirection::Upwards,
-                    Icmp6Type::PARAM_PROB => PacketDirection::Upwards,
-                    Icmp6Type::ECHO_REQUEST => PacketDirection::Upwards,
-                    Icmp6Type::ECHO_REPLY => PacketDirection::Downwards,
-                    Icmp6Type::MLD_LISTENER_QUERY => PacketDirection::Downwards,
-                    Icmp6Type::MLD_LISTENER_REPORT => PacketDirection::Upwards,
-                    Icmp6Type::MLD_LISTENER_REDUCTION => PacketDirection::Upwards,
-                    Icmp6Type::ROUTER_SOLICITATION => PacketDirection::Upwards,
-                    Icmp6Type::ROUTER_ADVERTISEMENT => PacketDirection::Downwards,
-                    Icmp6Type::NEIGHBOR_SOLICITATION => PacketDirection::Upwards,
-                    Icmp6Type::NEIGHBOR_ADVERTISEMENT => PacketDirection::Downwards,
-                    Icmp6Type::REDIRECT_MESSAGE => PacketDirection::Upwards,
-                    Icmp6Type::ROUTER_RENUMBERING => PacketDirection::Downwards,
-                    Icmp6Type::NODE_INFORMATION_QUERY => PacketDirection::Upwards,
-                    Icmp6Type::NODE_INFORMATION_RESPONSE => PacketDirection::Downwards,
-                    Icmp6Type::INVERSE_NEIGHBOR_DISCOVERY_SOLICITATION => PacketDirection::Upwards,
-                    Icmp6Type::INVERSE_NEIGHBOR_DISCOVERY_ADVERTISEMENT => {
-                        PacketDirection::Downwards
-                    }
-                    Icmp6Type::MULTICAST_LISTENER_DISCOVERY_REPORTS => PacketDirection::Upwards,
-                    Icmp6Type::HOME_AGENT_ADDRESS_DISCOVERY_REQUEST => PacketDirection::Upwards,
-                    Icmp6Type::HOME_AGENT_ADDRESS_DISCOVERY_REPLY => PacketDirection::Downwards,
-                    Icmp6Type::MOBILE_PREFIX_SOLICITATION => PacketDirection::Upwards,
-                    Icmp6Type::MOBILE_PREFIX_ADVERTISEMENT => PacketDirection::Downwards,
-                    Icmp6Type::MULTICAST_ROUTER_SOLICITATION => PacketDirection::Upwards,
-                    Icmp6Type::MULTICAST_ROUTER_TERMINATION => PacketDirection::Upwards,
-                    Icmp6Type::FMIPV6 => PacketDirection::Upwards,
-                    Icmp6Type::RPL_CONTROL_MESSAGE => PacketDirection::Upwards,
-                    Icmp6Type::ILNPV6_LOCATOR_UPDATE => PacketDirection::Upwards,
-                    Icmp6Type::DUPLICATE_ADDRESS_REQUEST => PacketDirection::Upwards,
-                    Icmp6Type::DUPLICATE_ADDRESS_CONFIRM => PacketDirection::Downwards,
-                    Icmp6Type::MPL_CONTROL_MESSAGE => PacketDirection::Upwards,
-                    Icmp6Type::EXTENDED_ECHO_REQUEST => PacketDirection::Upwards,
-                    Icmp6Type::EXTENDED_ECHO_REPLY => PacketDirection::Downwards,
-                    _ => PacketDirection::Upwards,
-                }
-            }
+            Some(TransportLayer::Icmp(icmp)) => match icmp.icmp_type() {
+                IcmpType::ECHO => PacketDirection::Upwards,
+                IcmpType::ECHO_REPLY => PacketDirection::Downwards,
+                IcmpType::TIMESTAMP => PacketDirection::Upwards,
+                IcmpType::TIMESTAMP_REPLY => PacketDirection::Downwards,
+                IcmpType::INFO_REQUEST => PacketDirection::Upwards,
+                IcmpType::INFO_REPLY => PacketDirection::Downwards,
+                IcmpType::ADDRESS => PacketDirection::Upwards,
+                IcmpType::ADDRESS_REPLY => PacketDirection::Downwards,
+                IcmpType::EX_ECHO => PacketDirection::Upwards,
+                IcmpType::EX_ECHO_REPLY => PacketDirection::Downwards,
+                IcmpType::DEST_UNREACH => PacketDirection::Upwards,
+                IcmpType::SOURCE_QUENCH => PacketDirection::Upwards,
+                IcmpType::REDIRECT => PacketDirection::Upwards,
+                IcmpType::ROUTER_ADV => PacketDirection::Downwards,
+                IcmpType::ROUTER_SOLICIT => PacketDirection::Upwards,
+                IcmpType::TIME_EXCEEDED => PacketDirection::Upwards,
+                IcmpType::PARAMETER_PROBLEM => PacketDirection::Upwards,
+                _ => PacketDirection::Upwards,
+            },
+            Some(TransportLayer::Icmp6(icmp6)) => match icmp6.icmp6_type() {
+                Icmp6Type::DST_UNREACH => PacketDirection::Upwards,
+                Icmp6Type::PACKET_TOO_BIG => PacketDirection::Upwards,
+                Icmp6Type::TIME_EXCEEDED => PacketDirection::Upwards,
+                Icmp6Type::PARAM_PROB => PacketDirection::Upwards,
+                Icmp6Type::ECHO_REQUEST => PacketDirection::Upwards,
+                Icmp6Type::ECHO_REPLY => PacketDirection::Downwards,
+                Icmp6Type::MLD_LISTENER_QUERY => PacketDirection::Downwards,
+                Icmp6Type::MLD_LISTENER_REPORT => PacketDirection::Upwards,
+                Icmp6Type::MLD_LISTENER_REDUCTION => PacketDirection::Upwards,
+                Icmp6Type::ROUTER_SOLICITATION => PacketDirection::Upwards,
+                Icmp6Type::ROUTER_ADVERTISEMENT => PacketDirection::Downwards,
+                Icmp6Type::NEIGHBOR_SOLICITATION => PacketDirection::Upwards,
+                Icmp6Type::NEIGHBOR_ADVERTISEMENT => PacketDirection::Downwards,
+                Icmp6Type::REDIRECT_MESSAGE => PacketDirection::Upwards,
+                Icmp6Type::ROUTER_RENUMBERING => PacketDirection::Downwards,
+                Icmp6Type::NODE_INFORMATION_QUERY => PacketDirection::Upwards,
+                Icmp6Type::NODE_INFORMATION_RESPONSE => PacketDirection::Downwards,
+                Icmp6Type::INVERSE_NEIGHBOR_DISCOVERY_SOLICITATION => PacketDirection::Upwards,
+                Icmp6Type::INVERSE_NEIGHBOR_DISCOVERY_ADVERTISEMENT => PacketDirection::Downwards,
+                Icmp6Type::MULTICAST_LISTENER_DISCOVERY_REPORTS => PacketDirection::Upwards,
+                Icmp6Type::HOME_AGENT_ADDRESS_DISCOVERY_REQUEST => PacketDirection::Upwards,
+                Icmp6Type::HOME_AGENT_ADDRESS_DISCOVERY_REPLY => PacketDirection::Downwards,
+                Icmp6Type::MOBILE_PREFIX_SOLICITATION => PacketDirection::Upwards,
+                Icmp6Type::MOBILE_PREFIX_ADVERTISEMENT => PacketDirection::Downwards,
+                Icmp6Type::MULTICAST_ROUTER_SOLICITATION => PacketDirection::Upwards,
+                Icmp6Type::MULTICAST_ROUTER_TERMINATION => PacketDirection::Upwards,
+                Icmp6Type::FMIPV6 => PacketDirection::Upwards,
+                Icmp6Type::RPL_CONTROL_MESSAGE => PacketDirection::Upwards,
+                Icmp6Type::ILNPV6_LOCATOR_UPDATE => PacketDirection::Upwards,
+                Icmp6Type::DUPLICATE_ADDRESS_REQUEST => PacketDirection::Upwards,
+                Icmp6Type::DUPLICATE_ADDRESS_CONFIRM => PacketDirection::Downwards,
+                Icmp6Type::MPL_CONTROL_MESSAGE => PacketDirection::Upwards,
+                Icmp6Type::EXTENDED_ECHO_REQUEST => PacketDirection::Upwards,
+                Icmp6Type::EXTENDED_ECHO_REPLY => PacketDirection::Downwards,
+                _ => PacketDirection::Upwards,
+            },
             Some(TransportLayer::Sctp(_)) | None => PacketDirection::Upwards,
         }
     }
@@ -164,7 +158,7 @@ impl PacketDirection {
         if (source == 123 || dest == 123) && !data.is_empty() {
             let mode = data[0] & 0x07;
             return match mode {
-                1 | 3 => PacketDirection::Upwards,       // Symmetric Active, Client
+                1 | 3 => PacketDirection::Upwards, // Symmetric Active, Client
                 2 | 4 | 5 => PacketDirection::Downwards, // Symmetric Passive, Server, Broadcast
                 _ => {
                     // Fall through to port-based logic

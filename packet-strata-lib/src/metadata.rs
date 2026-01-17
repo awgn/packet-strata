@@ -1,6 +1,6 @@
-use std::cmp::min;
-use pcap_parser::{EnhancedPacketBlock, LegacyPcapBlock, SimplePacketBlock};
 use crate::timestamp::Timestamp;
+use pcap_parser::{EnhancedPacketBlock, LegacyPcapBlock, SimplePacketBlock};
+use std::cmp::min;
 
 pub trait PacketMetadata {
     fn caplen(&self) -> u32;

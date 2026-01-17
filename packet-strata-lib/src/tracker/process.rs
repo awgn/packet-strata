@@ -1,4 +1,4 @@
-use crate::{metadata::PacketMetadata, packet::Packet};
+use crate::{metadata::PacketMetadata, packet::Packet, tracker::direction::PacketDirection};
 
 /// A trait for types that can process a packet and update their state.
 ///
@@ -6,9 +6,20 @@ use crate::{metadata::PacketMetadata, packet::Packet};
 /// and protocol-specific state machines (like TCP) upon receiving a new packet.
 pub trait Process {
     /// Update the state based on the provided packet metadata and content.
-    fn process<Meta: PacketMetadata>(&mut self, meta: &Meta, pkt: &Packet<'_>);
+    fn process<Meta: PacketMetadata>(
+        &mut self,
+        meta: &Meta,
+        pkt: &Packet<'_>,
+        dir: PacketDirection,
+    );
 }
 
 impl Process for () {
-    fn process<Meta: PacketMetadata>(&mut self, _meta: &Meta, _pkt: &Packet<'_>) {}
+    fn process<Meta: PacketMetadata>(
+        &mut self,
+        _meta: &Meta,
+        _pkt: &Packet<'_>,
+        _dir: PacketDirection,
+    ) {
+    }
 }

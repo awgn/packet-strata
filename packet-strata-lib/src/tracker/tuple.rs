@@ -18,6 +18,8 @@ use crate::{
 /// This trait defines the interface for creating flow tuples from packets.
 /// (e.g., 5-tuple with VNI, 3-tuple, MAC-based, etc.)
 pub trait Tuple: Sized + Hash + Eq + Clone + Copy {
+    type Addr: Eq;
+
     /// Create a new flow tuple from a packet
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self>;
 
@@ -31,6 +33,34 @@ pub trait Tuple: Sized + Hash + Eq + Clone + Copy {
     /// Checks equality in a canonical (symmetric) way without creating a new instance.
     /// Used by `Symmetric` wrapper to ensure `Eq(A->B, B->A)`.
     fn eq_canonical(&self, other: &Self) -> bool;
+
+    /// Checks if the tuple is symmetric (source equals destination).
+    ///
+    /// A tuple is considered symmetric when both the source address equals the destination
+    /// address and the source port equals the destination port. This is useful for
+    /// identifying self-referential connections.
+    #[inline]
+    fn is_symmetric(&self) -> bool {
+        self.source_port() == self.dest_port() && self.source() == self.dest()
+    }
+
+    /// Returns the source address of the flow tuple.
+    fn source(&self) -> Self::Addr;
+
+    /// Returns the destination address of the flow tuple.
+    fn dest(&self) -> Self::Addr;
+
+    /// Returns the source port of the flow tuple.
+    fn source_port(&self) -> u16;
+
+    /// Returns the destination port of the flow tuple.
+    fn dest_port(&self) -> u16;
+
+    /// Returns the IP protocol of the flow tuple.
+    fn protocol(&self) -> IpProto;
+
+    /// Returns the VNI (VXLAN Network Identifier) of the flow tuple.
+    fn vni(&self) -> VniId;
 }
 
 /// Helper function to extract VNI from packet tunnels
@@ -145,6 +175,38 @@ impl TupleV4 {
 }
 
 impl Tuple for TupleV4 {
+    type Addr = Ipv4Addr;
+
+    #[inline]
+    fn source(&self) -> Self::Addr {
+        self.src_ip
+    }
+
+    #[inline]
+    fn dest(&self) -> Self::Addr {
+        self.dst_ip
+    }
+
+    #[inline]
+    fn source_port(&self) -> u16 {
+        self.src_port
+    }
+
+    #[inline]
+    fn dest_port(&self) -> u16 {
+        self.dst_port
+    }
+
+    #[inline]
+    fn protocol(&self) -> IpProto {
+        self.protocol
+    }
+
+    #[inline]
+    fn vni(&self) -> VniId {
+        self.vni
+    }
+
     #[inline]
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
         Self::new(pkt, vni_mapper)
@@ -259,6 +321,38 @@ impl TupleV6 {
 }
 
 impl Tuple for TupleV6 {
+    type Addr = Ipv6Addr;
+
+    #[inline]
+    fn source(&self) -> Self::Addr {
+        self.src_ip
+    }
+
+    #[inline]
+    fn dest(&self) -> Self::Addr {
+        self.dst_ip
+    }
+
+    #[inline]
+    fn source_port(&self) -> u16 {
+        self.src_port
+    }
+
+    #[inline]
+    fn dest_port(&self) -> u16 {
+        self.dst_port
+    }
+
+    #[inline]
+    fn protocol(&self) -> IpProto {
+        self.protocol
+    }
+
+    #[inline]
+    fn vni(&self) -> VniId {
+        self.vni
+    }
+
     #[inline]
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
         Self::new(pkt, vni_mapper)
@@ -346,6 +440,38 @@ impl TupleEth {
 }
 
 impl Tuple for TupleEth {
+    type Addr = EthAddr;
+
+    #[inline]
+    fn source(&self) -> Self::Addr {
+        self.src
+    }
+
+    #[inline]
+    fn dest(&self) -> Self::Addr {
+        self.dst
+    }
+
+    #[inline]
+    fn source_port(&self) -> u16 {
+        0
+    }
+
+    #[inline]
+    fn dest_port(&self) -> u16 {
+        0
+    }
+
+    #[inline]
+    fn protocol(&self) -> IpProto {
+        IpProto::default()
+    }
+
+    #[inline]
+    fn vni(&self) -> VniId {
+        VniId::default()
+    }
+
     #[inline]
     fn from_packet(pkt: &Packet<'_>, _vni_mapper: &mut VniMapper) -> Option<Self> {
         Self::new(pkt)

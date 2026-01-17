@@ -6,10 +6,10 @@ use packet_strata::tracker::direction::PacketDirection;
 use packet_strata::tracker::flow::Flow;
 use packet_strata::tracker::tuple::{Symmetric, TupleV4, TupleV6};
 
-use packet_strata::metadata::PacketMetadata;
-use packet_strata::tracker::process::Process;
 use crate::stats::{LocalStats, Stats, FLUSH_INTERVAL};
 use crate::{Args, FlowTracker};
+use packet_strata::metadata::PacketMetadata;
+use packet_strata::tracker::process::Process;
 
 /// Process a single packet using the PacketIter iterator
 ///
@@ -207,11 +207,17 @@ pub fn process_full_packet<'a, Meta: PacketMetadata>(
                                     &Symmetric(tuple),
                                     || -> Flow<TupleV4, ()> {
                                         let dir = PacketDirection::infer(&packet);
-                                        Flow::<TupleV4, ()>::new(meta.timestamp(), tuple, &packet, dir)
+                                        Flow::<TupleV4, ()>::new(
+                                            meta.timestamp(),
+                                            tuple,
+                                            &packet,
+                                            dir,
+                                        )
                                     },
                                 );
 
-                                flow.process(meta, &packet);
+                                let dir = flow.packet_dir(&packet);
+                                flow.process(meta, &packet, dir);
                             }
                         }
                     }
@@ -224,11 +230,17 @@ pub fn process_full_packet<'a, Meta: PacketMetadata>(
                                     &Symmetric(tuple),
                                     || -> Flow<TupleV6, ()> {
                                         let dir = PacketDirection::infer(&packet);
-                                        Flow::<TupleV6, ()>::new(meta.timestamp(), tuple, &packet, dir)
+                                        Flow::<TupleV6, ()>::new(
+                                            meta.timestamp(),
+                                            tuple,
+                                            &packet,
+                                            dir,
+                                        )
                                     },
                                 );
 
-                                flow.process(meta, &packet);
+                                let dir = flow.packet_dir(&packet);
+                                flow.process(meta, &packet, dir);
                             }
                         }
                     }
