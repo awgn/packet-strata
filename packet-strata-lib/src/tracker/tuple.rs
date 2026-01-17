@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -12,19 +13,18 @@ use crate::{
     tracker::vni::{VniId, VniLayer, VniMapper},
 };
 
-/// Common trait for all flow key types
+/// Common trait for all flow tuple types
 ///
-/// This trait defines the interface for creating flow keys from packets.
-/// Different implementations can create keys with different granularities
+/// This trait defines the interface for creating flow tuples from packets.
 /// (e.g., 5-tuple with VNI, 3-tuple, MAC-based, etc.)
-pub trait FlowKey: Sized + Hash + Eq + Clone + Copy {
-    /// Create a new flow key from a packet
+pub trait Tuple: Sized + Hash + Eq + Clone + Copy {
+    /// Create a new flow tuple from a packet
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self>;
 
-    /// Flip the source and destination fields of the flow key
+    /// Flip the source and destination fields of the flow tuple
     fn flip(&self) -> Self;
 
-    /// Hashes the key in a canonical (symmetric) way without creating a new instance.
+    /// Hashes the tuple in a canonical (symmetric) way without creating a new instance.
     /// Used by `Symmetric` wrapper to ensure `Hash(A->B) == Hash(B->A)`.
     fn hash_canonical<H: Hasher>(&self, state: &mut H);
 
@@ -35,7 +35,7 @@ pub trait FlowKey: Sized + Hash + Eq + Clone + Copy {
 
 /// Helper function to extract VNI from packet tunnels
 ///
-/// This function is shared between all FlowKey implementations to avoid code duplication.
+/// This function is shared between all Tuple implementations to avoid code duplication.
 /// Returns `VNI_NULL` if there are no tunnel layers, otherwise extracts and maps the VNI stack.
 #[inline]
 fn extract_vni(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<VniId> {
@@ -64,38 +64,38 @@ fn extract_ports(pkt: &Packet<'_>) -> (u16, u16) {
 
 #[derive(Debug, Copy, Clone)]
 #[repr(transparent)]
-pub struct Symmetric<F: FlowKey>(pub F);
+pub struct Symmetric<T: Tuple>(pub T);
 
-impl<K: FlowKey> PartialEq for Symmetric<K> {
+impl<T: Tuple> PartialEq for Symmetric<T> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.0.eq_canonical(&other.0)
     }
 }
 
-impl<K: FlowKey> Eq for Symmetric<K> {}
+impl<T: Tuple> Eq for Symmetric<T> {}
 
-impl<K: FlowKey> Hash for Symmetric<K> {
+impl<T: Tuple> Hash for Symmetric<T> {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.hash_canonical(state);
     }
 }
 
-impl<K: FlowKey> From<K> for Symmetric<K> {
-    fn from(k: K) -> Self {
-        Self(k)
+impl<T: Tuple> From<T> for Symmetric<T> {
+    fn from(t: T) -> Self {
+        Self(t)
     }
 }
 
-/// IPv4 5-tuple flow key with VNI support
+/// IPv4 5-tuple flow with VNI support
 ///
-/// This key uniquely identifies a network flow using:
+/// This tuple uniquely identifies a network flow using:
 /// - Source and destination IPv4 addresses
 /// - Source and destination ports
 /// - IP protocol number
 /// - Virtual Network Identifier (VNI) for tunnel-aware flow tracking
-#[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
+#[derive(Hash, Eq, PartialEq, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct TupleV4 {
     pub src_ip: Ipv4Addr,
     pub dst_ip: Ipv4Addr,
@@ -119,7 +119,7 @@ impl Default for TupleV4 {
 }
 
 impl TupleV4 {
-    /// Create a new IPv4 flow key from a packet
+    /// Create a new IPv4 flow tuple from a packet
     ///
     /// Returns `None` if the packet does not contain an IPv4 header or if VNI extraction fails.
     pub fn new(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
@@ -144,7 +144,7 @@ impl TupleV4 {
     }
 }
 
-impl FlowKey for TupleV4 {
+impl Tuple for TupleV4 {
     #[inline]
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
         Self::new(pkt, vni_mapper)
@@ -202,14 +202,14 @@ impl FlowKey for TupleV4 {
     }
 }
 
-/// IPv6 5-tuple flow key with VNI support
+/// IPv6 5-tuple flow tuple with VNI support
 ///
-/// This key uniquely identifies a network flow using:
+/// This tuple uniquely identifies a network flow using:
 /// - Source and destination IPv6 addresses
 /// - Source and destination ports
 /// - IP protocol number (next header)
 /// - Virtual Network Identifier (VNI) for tunnel-aware flow tracking
-#[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
+#[derive(Hash, Eq, PartialEq, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct TupleV6 {
     pub src_ip: Ipv6Addr,
     pub dst_ip: Ipv6Addr,
@@ -233,7 +233,7 @@ impl Default for TupleV6 {
 }
 
 impl TupleV6 {
-    /// Create a new IPv6 flow key from a packet
+    /// Create a new IPv6 flow tuple from a packet
     ///
     /// Returns `None` if the packet does not contain an IPv6 header or if VNI extraction fails.
     pub fn new(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
@@ -258,7 +258,7 @@ impl TupleV6 {
     }
 }
 
-impl FlowKey for TupleV6 {
+impl Tuple for TupleV6 {
     #[inline]
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
         Self::new(pkt, vni_mapper)
@@ -311,7 +311,7 @@ impl FlowKey for TupleV6 {
     }
 }
 
-#[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
+#[derive(Hash, Eq, PartialEq, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct TupleEth {
     pub src: EthAddr,
     pub dst: EthAddr,
@@ -329,7 +329,7 @@ impl Default for TupleEth {
 }
 
 impl TupleEth {
-    /// Create a new Ethernet flow key from a packet
+    /// Create a new Ethernet flow tuple from a packet
     ///
     /// Returns `None` if the packet is not Ethernet.
     pub fn new(pkt: &Packet<'_>) -> Option<Self> {
@@ -345,7 +345,7 @@ impl TupleEth {
     }
 }
 
-impl FlowKey for TupleEth {
+impl Tuple for TupleEth {
     #[inline]
     fn from_packet(pkt: &Packet<'_>, _vni_mapper: &mut VniMapper) -> Option<Self> {
         Self::new(pkt)

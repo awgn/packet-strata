@@ -1,9 +1,10 @@
 use ahash::RandomState;
 use hashlink::LinkedHashMap;
 
-pub mod flow;
 pub mod direction;
-pub mod flow_tuple;
+pub mod process;
+pub mod flow;
+pub mod tuple;
 pub mod vni;
 
 /// Trait for types that have an intrinsic timestamp
@@ -169,8 +170,8 @@ mod tests {
     impl Trackable for FlowData {
         type Timestamp = u64;
 
-        fn timestamp(&self) -> &u64 {
-            &self.timestamp
+        fn timestamp(&self) -> u64 {
+            self.timestamp
         }
 
         fn set_timestamp(&mut self, ts: u64) {

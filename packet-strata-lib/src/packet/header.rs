@@ -3,6 +3,8 @@
 //! This module provides the [`Header`] enum which wraps all supported protocol headers
 //! and [`UnknownProto`] for representing unknown/unsupported protocols.
 
+use crate::packet::ether::EthAddr;
+
 use super::arp::ArpHeaderFull;
 use super::ether::EtherHeaderVlan;
 use super::icmp::IcmpHeader;
@@ -307,6 +309,34 @@ pub enum LinkLayer<'a> {
     Sll(&'a SllHeader),
     Sllv2(&'a Sllv2Header),
     Null(&'a NullHeader),
+}
+
+impl LinkLayer<'_> {
+    #[inline]
+    pub fn protocol(&self) -> EtherProto {
+        match self {
+            LinkLayer::Ethernet(h) => h.protocol(),
+            LinkLayer::Sll(h) => h.protocol(),
+            LinkLayer::Sllv2(h) => h.protocol(),
+            LinkLayer::Null(h) => h.protocol(),
+        }
+    }
+
+    #[inline]
+    pub fn source(&self) -> EthAddr {
+        match self {
+            crate::packet::header::LinkLayer::Ethernet(ether) => *ether.source(),
+            _ => EthAddr::default(),
+        }
+    }
+
+    #[inline]
+    pub fn dest(&self) -> EthAddr {
+        match self {
+            crate::packet::header::LinkLayer::Ethernet(ether) => *ether.dest(),
+            _ => EthAddr::default(),
+        }
+    }
 }
 
 impl std::fmt::Display for LinkLayer<'_> {

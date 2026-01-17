@@ -1,7 +1,8 @@
-use std::fmt;
 use chrono::DateTime;
+use serde::{Deserialize, Serialize};
+use std::fmt;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
 pub struct Timestamp(pub u64);
 
 impl fmt::Display for Timestamp {
@@ -29,6 +30,11 @@ pub struct Nanoseconds(pub u64);
 
 impl fmt::Display for Nanoseconds {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{:09}", self.0 / 1_000_000_000, self.0 % 1_000_000_000)
+        write!(
+            f,
+            "{}.{:09}",
+            self.0 / 1_000_000_000,
+            self.0 % 1_000_000_000
+        )
     }
 }

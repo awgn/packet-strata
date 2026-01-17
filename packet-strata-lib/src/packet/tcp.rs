@@ -423,36 +423,36 @@ mod tests {
 
         // Test each flag individually
         header.data_offset_flags = U16::new((5 << 12) | TcpHeader::FLAG_FIN as u16);
-        assert!(header.is_fin());
-        assert!(!header.is_syn());
+        assert!(header.has_fin());
+        assert!(!header.has_syn());
 
         header.data_offset_flags = U16::new((5 << 12) | TcpHeader::FLAG_SYN as u16);
-        assert!(header.is_syn());
-        assert!(!header.is_fin());
+        assert!(header.has_syn());
+        assert!(!header.has_fin());
 
         header.data_offset_flags = U16::new((5 << 12) | TcpHeader::FLAG_RST as u16);
-        assert!(header.is_rst());
+        assert!(header.has_rst());
 
         header.data_offset_flags = U16::new((5 << 12) | TcpHeader::FLAG_PSH as u16);
-        assert!(header.is_psh());
+        assert!(header.has_psh());
 
         header.data_offset_flags = U16::new((5 << 12) | TcpHeader::FLAG_ACK as u16);
-        assert!(header.is_ack());
+        assert!(header.has_ack());
 
         header.data_offset_flags = U16::new((5 << 12) | TcpHeader::FLAG_URG as u16);
-        assert!(header.is_urg());
+        assert!(header.has_urg());
 
         header.data_offset_flags = U16::new((5 << 12) | TcpHeader::FLAG_ECE as u16);
-        assert!(header.is_ece());
+        assert!(header.has_ece());
 
         header.data_offset_flags = U16::new((5 << 12) | TcpHeader::FLAG_CWR as u16);
-        assert!(header.is_cwr());
+        assert!(header.has_cwr());
 
         // Test multiple flags
         header.data_offset_flags =
             U16::new((5 << 12) | (TcpHeader::FLAG_SYN | TcpHeader::FLAG_ACK) as u16);
-        assert!(header.is_syn());
-        assert!(header.is_ack());
+        assert!(header.has_syn());
+        assert!(header.has_ack());
         assert_eq!(header.flags_string(), "SA");
     }
 
@@ -467,7 +467,7 @@ mod tests {
         assert_eq!(header.src_port(), 54321);
         assert_eq!(header.dst_port(), 80);
         assert_eq!(header.data_offset(), 5);
-        assert!(header.is_syn());
+        assert!(header.has_syn());
         assert!(header.is_valid());
         assert_eq!(payload.len(), 0); // No payload in test packet
     }
@@ -683,8 +683,8 @@ mod tests {
         // Verify header info
         assert_eq!(header.data_offset(), 7);
         assert_eq!(header.total_len(&packet), 28);
-        assert!(header.is_psh());
-        assert!(header.is_ack());
+        assert!(header.has_psh());
+        assert!(header.has_ack());
     }
 
     #[test]

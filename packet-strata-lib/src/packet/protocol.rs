@@ -37,9 +37,12 @@
 //! ```
 
 use core::fmt::{self, Display, Formatter};
+use serde::{Deserialize, Serialize};
 use zerocopy::{BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, U16};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, IntoBytes, Immutable, KnownLayout)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, IntoBytes, Immutable, KnownLayout, Serialize, Deserialize)]
+#[serde(into = "u16")]
+#[serde(try_from = "u16")]
 pub struct EtherProto(pub U16<BigEndian>);
 
 impl Default for EtherProto {
@@ -242,7 +245,7 @@ impl From<EtherProto> for u16 {
 ///
 /// This type provides named constants for well-known protocols and implements
 /// `Display` to show human-readable protocol names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, IntoBytes, Immutable, KnownLayout)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromBytes, IntoBytes, Immutable, KnownLayout, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct IpProto(pub u8);
 

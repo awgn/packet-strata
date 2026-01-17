@@ -4,17 +4,15 @@ use std::{
 };
 
 use chrono::TimeDelta;
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    packet::{
-        ether::EthAddr, header::TransportLayer, icmp::IcmpType, icmp6::Icmp6Type,
-        protocol::EtherProto, Packet,
-    },
-    timestamp::Timestamp,
-    tracker::Trackable,
+    metadata::PacketMetadata, packet::{
+        Packet, ether::EthAddr, icmp::IcmpType, protocol::EtherProto
+    }, timestamp::Timestamp, tracker::{Trackable, direction::PacketDirection, tuple::Tuple, process::Process}
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TcpState {
     #[default]
     /// Initial state, or when tracking metadata is evicted/expired.
@@ -46,7 +44,7 @@ pub enum TcpState {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Termination {
     /// Normal TCP shutdown (FIN exchange observed).
     #[default]
@@ -142,7 +140,7 @@ impl Display for Termination {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum FlowType {
     #[default]
     /// Unspecified or unknown flow type.
@@ -181,7 +179,7 @@ impl Display for FlowType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct IpInfo {
     /// Uplink IP identification.
     u_id: Option<u16>,
@@ -193,7 +191,7 @@ pub struct IpInfo {
     d_lost: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct TcpInfo {
     /// Timestamp of the initial SYN packet.
     ts_syn: Timestamp,
@@ -224,20 +222,8 @@ pub struct TcpInfo {
     state: TcpState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Flow<Tuple, T> {
-    /// Flow classification (Uplink, Downlink, etc.).
-    pub r#type: FlowType,
-
-    /// Reason for flow termination.
-    pub termination: Termination,
-
-    /// IP layer statistics and info.
-    pub ip_info: IpInfo,
-
-    /// TCP layer statistics and info (optional).
-    pub tcp_info: TcpInfo,
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Flow<T, D> {
     /// Timestamp of the first packet in the flow.
     pub start_ts: Timestamp,
 
@@ -254,7 +240,19 @@ pub struct Flow<Tuple, T> {
     pub eth_proto: EtherProto,
 
     /// Generic address tuple (e.g. TupleV4, TupleV6 or TupleL2)
-    pub addr: Tuple,
+    pub tuple: T,
+
+    /// Flow classification (Uplink, Downlink, etc.).
+    pub r#type: FlowType,
+
+    /// Reason for flow termination.
+    pub termination: Termination,
+
+    /// IP layer statistics and info.
+    pub ip_info: IpInfo,
+
+    /// TCP layer statistics and info (optional).
+    pub tcp_info: TcpInfo,
 
     /// Total uplink bytes.
     pub u_bytes: usize,
@@ -287,37 +285,47 @@ pub struct Flow<Tuple, T> {
     pub d_frags: u32,
 
     /// Custom data associated with the flow.
-    pub data: T,
+    pub data: D,
 }
 
-
-impl<A, T> Flow<A, T>
+impl<T, D> Flow<T, D>
 where
-    A: Default,
-    T: Default,
+    T: Default + Clone + Tuple + Sized,
+    D: Default,
 {
-    pub fn new(timestamp: Timestamp, pkt: &Packet<'_>) -> Self {
-        todo!()
+    pub fn new(timestamp: Timestamp, tuple: T, pkt: &Packet<'_>, dir: PacketDirection) -> Self {
+        let upwards = matches!(dir, PacketDirection::Upwards);
+        Self {
+            start_ts: timestamp,
+            last_ts: timestamp,
+            src_mac: if upwards { pkt.link().source() } else { pkt.link().dest() },
+            dst_mac: if upwards { pkt.link().dest() } else { pkt.link().source() },
+            eth_proto: pkt.link().protocol(),
+            tuple: if upwards { tuple } else { tuple.flip() },
+            ..Default::default()
+        }
     }
 }
 
-impl<A, T> Flow<A, T> {
-    fn add_packet(&mut self, timestamp: Timestamp, len: usize, pkt: &Packet<'_>) {
-        self.last_ts = timestamp;
-
+impl<A, T> Process for Flow<A, T>
+    where T: Process,
+{
+    fn process<Meta: PacketMetadata>(&mut self, meta: &Meta, pkt: &Packet<'_>) {
+        self.last_ts = meta.timestamp();
         let uplink = true;
-
         if uplink {
-            self.u_bytes += len;
+            self.u_bytes += meta.caplen() as usize;
             self.u_pkts += 1;
             self.u_payload_bytes += pkt.data().len();
             self.u_payload_pkts += (!pkt.data().is_empty()) as u32;
         } else {
-            self.d_bytes += len;
+            self.d_bytes += meta.caplen() as usize;
             self.d_pkts += 1;
             self.d_payload_bytes += pkt.data().len();
             self.d_payload_pkts += (!pkt.data().is_empty()) as u32;
         }
+
+        self.data.process(meta, pkt);
     }
 }
 

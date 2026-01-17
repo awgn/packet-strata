@@ -76,6 +76,7 @@
 use core::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zerocopy::{BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, U16};
 
@@ -104,7 +105,11 @@ const VLAN_TAG_LEN: usize = 4; // VLAN tag length
     IntoBytes,
     Immutable,
     KnownLayout,
+    Serialize,
+    Deserialize
 )]
+#[serde(into = "String")]
+#[serde(try_from = "String")]
 pub struct EthAddr([u8; ETH_ALEN]);
 
 impl Default for EthAddr {
@@ -131,25 +136,33 @@ pub enum EtherError {
 
 impl FromStr for EthAddr {
     type Err = EtherError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut addr = [0u8; ETH_ALEN];
-        let mut idx = 0;
+        let bytes: Vec<u8> = s.split(':')
+            .map(|part| u8::from_str_radix(part, 16).map_err(|_| EtherError::InvalidAddressFormat))
+            .collect::<Result<Vec<u8>, _>>()?;
 
-        for part in s.split(':') {
-            if idx >= ETH_ALEN {
-                return Err(EtherError::InvalidAddressFormat);
-            }
-            addr[idx] =
-                u8::from_str_radix(part, 16).map_err(|_| EtherError::InvalidAddressFormat)?;
-            idx += 1;
-        }
-
-        if idx != ETH_ALEN {
+        if bytes.len() != ETH_ALEN {
             return Err(EtherError::InvalidAddressFormat);
         }
 
+        let mut addr = [0u8; ETH_ALEN];
+        addr.copy_from_slice(&bytes);
         Ok(EthAddr(addr))
+    }
+}
+
+impl From<EthAddr> for String {
+    #[inline]
+    fn from(addr: EthAddr) -> Self {
+        addr.to_string()
+    }
+}
+
+impl TryFrom<String> for EthAddr {
+    type Error = EtherError;
+    #[inline]
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        EthAddr::from_str(&s)
     }
 }
 
@@ -170,7 +183,7 @@ impl EtherHeader {
         &self.source
     }
 
-    pub fn proto(&self) -> EtherProto {
+    pub fn protocol(&self) -> EtherProto {
         self.proto
     }
 }

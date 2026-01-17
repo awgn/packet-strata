@@ -34,6 +34,7 @@
 //! }
 //! ```
 
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -501,7 +502,7 @@ impl TryFrom<&Packet<'_>> for SmallVec<[VniLayer; 4]> {
 ///
 /// This is an opaque identifier used to reference a specific VNI layer stack
 /// in the mapper. The actual value has no semantic meaning outside of the mapper.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
 pub struct VniId(u32);
 
 impl VniId {

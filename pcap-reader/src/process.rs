@@ -1,12 +1,13 @@
-
 use packet_strata::packet::header::{LinkLayer, NetworkLayer, TransportLayer, TunnelLayer};
 use packet_strata::packet::iter::{Header, LinkType, PacketIter};
 use packet_strata::packet::tunnel::ipip::IpipType;
 use packet_strata::packet::{Packet, ParseMode};
+use packet_strata::tracker::direction::PacketDirection;
 use packet_strata::tracker::flow::Flow;
-use packet_strata::tracker::flow_tuple::{TupleV4, TupleV6, Symmetric};
+use packet_strata::tracker::tuple::{Symmetric, TupleV4, TupleV6};
 
-use crate::packet_metadata::PacketMetadata;
+use packet_strata::metadata::PacketMetadata;
+use packet_strata::tracker::process::Process;
 use crate::stats::{LocalStats, Stats, FLUSH_INTERVAL};
 use crate::{Args, FlowTracker};
 
@@ -153,30 +154,30 @@ pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
     }
 }
 
-pub fn process_full_packet<'a, Pkt: PacketMetadata>(
+pub fn process_full_packet<'a, Meta: PacketMetadata>(
     _pkt_count: u64,
     link_type: &mut Option<LinkType>,
-    pkt: &'a Pkt,
+    meta: &'a Meta,
     local_stats: &mut LocalStats,
     stats: &Stats,
     flow_tracker: &mut FlowTracker,
     args: &Args,
 ) {
     local_stats.total_packets += 1;
-    local_stats.total_bytes += pkt.caplen() as u64;
+    local_stats.total_bytes += meta.caplen() as u64;
 
     if link_type.is_none() {
-        *link_type = Some(PacketIter::guess_link_type(pkt.data()));
+        *link_type = Some(PacketIter::guess_link_type(meta.data()));
     }
 
-    match Packet::from_bytes(pkt.data(), link_type.unwrap(), ParseMode::Innermost) {
+    match Packet::from_bytes(meta.data(), link_type.unwrap(), ParseMode::Innermost) {
         Ok(packet) => {
             if args.dump_packet {
                 println!(
                     "{:>5}   {} ({} bytes)",
                     local_stats.total_packets,
-                    pkt.timestamp(),
-                    pkt.data().len()
+                    meta.timestamp(),
+                    meta.data().len()
                 );
                 print!("{}", packet);
             }
@@ -205,17 +206,12 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
                                 let flow = flow_tracker.v4.get_or_insert_with(
                                     &Symmetric(tuple),
                                     || -> Flow<TupleV4, ()> {
-                                        let now = pkt.timestamp();
-                                        Flow {
-                                            start_ts: now,
-                                            end_ts: now,
-                                            addr: tuple,
-                                            .. Flow::default()
-                                        }
+                                        let dir = PacketDirection::infer(&packet);
+                                        Flow::<TupleV4, ()>::new(meta.timestamp(), tuple, &packet, dir)
                                     },
                                 );
 
-                                flow.end_ts = pkt.timestamp();
+                                flow.process(meta, &packet);
                             }
                         }
                     }
@@ -226,18 +222,13 @@ pub fn process_full_packet<'a, Pkt: PacketMetadata>(
                             {
                                 let flow = flow_tracker.v6.get_or_insert_with(
                                     &Symmetric(tuple),
-                                    || -> Flow<TupleV6,()> {
-                                        let now = pkt.timestamp();
-                                        Flow {
-                                            start_ts: now,
-                                            end_ts: now,
-                                            addr: tuple,
-                                            .. Flow::default()
-                                        }
+                                    || -> Flow<TupleV6, ()> {
+                                        let dir = PacketDirection::infer(&packet);
+                                        Flow::<TupleV6, ()>::new(meta.timestamp(), tuple, &packet, dir)
                                     },
                                 );
 
-                                flow.end_ts = pkt.timestamp();
+                                flow.process(meta, &packet);
                             }
                         }
                     }

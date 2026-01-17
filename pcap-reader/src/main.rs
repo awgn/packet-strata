@@ -1,16 +1,16 @@
 use clap::Parser;
-use packet_strata::{
-    tracker::{
-        Tracker, flow::Flow, flow_tuple::{TupleV4, TupleV6, Symmetric}, vni::VniMapper
-    },
+use packet_strata::tracker::{
+    flow::Flow,
+    tuple::{Symmetric, TupleV4, TupleV6},
+    vni::VniMapper,
+    Tracker,
 };
 use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::*;
-use std::{fs::File};
+use std::fs::File;
 use std::path::PathBuf;
 use tracing::{error, info};
 
-mod packet_metadata;
 mod process;
 mod stats;
 
@@ -25,6 +25,10 @@ struct Args {
     /// dump packet contents
     #[arg(short, long)]
     dump_packet: bool,
+
+    /// dump packet contents
+    #[arg(long)]
+    dump_flows: bool,
 
     /// Parse full packet, instead of using iterator
     #[arg(short, long)]
@@ -210,6 +214,19 @@ fn process_pcap(
 
     // Final flush of local stats
     local_stats.flush(stats);
+
+    if args.dump_flows {
+        for (_, flow) in flow_tracker.v4.iter() {
+            if let Ok(json) = serde_json::to_string(flow) {
+                println!("{}", json);
+            }
+        }
+        for (_, flow) in flow_tracker.v6.iter() {
+            if let Ok(json) = serde_json::to_string(flow) {
+                println!("{}", json);
+            }
+        }
+    }
 
     info!(
         "Total packets processed: {}, {:.3}M pkt/sec, {:.3} Gbps",

@@ -13,10 +13,12 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+pcap-parser.workspace = true
 ahash = "0.8.12"
-chrono.workspace = true
 hashlink = "0.11.0"
 smallvec = { workspace = true, features = ["const_new"] }
 smol_str.workspace = true
 thiserror.workspace = true
 zerocopy.workspace = true
+serde.workspace = true
+chrono.workspace = true

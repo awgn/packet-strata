@@ -2484,7 +2484,7 @@ mod tests {
         let h1 = iter.next().unwrap().unwrap();
         assert!(matches!(h1, Header::Ethernet(_)));
         if let Header::Ethernet(eth) = h1 {
-            assert_eq!(eth.proto(), EtherProto::IPV4);
+            assert_eq!(eth.protocol(), EtherProto::IPV4);
         }
 
         // Second: outer IPv4 (protocol 0x2f = 47 = GRE)
@@ -2538,7 +2538,7 @@ mod tests {
             h1
         );
         if let Header::Ethernet(eth) = h1 {
-            assert_eq!(eth.proto(), EtherProto::IPV6);
+            assert_eq!(eth.protocol(), EtherProto::IPV6);
         }
 
         // Second: IP4in6 tunnel (wraps outer IPv6 with next header = 4)
