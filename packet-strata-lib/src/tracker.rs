@@ -2,6 +2,7 @@ use ahash::RandomState;
 use hashlink::LinkedHashMap;
 
 pub mod flow;
+pub mod direction;
 pub mod flow_tuple;
 pub mod vni;
 

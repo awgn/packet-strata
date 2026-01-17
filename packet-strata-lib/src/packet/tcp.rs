@@ -147,49 +147,49 @@ impl TcpHeader {
 
     /// Check if FIN flag is set
     #[inline]
-    pub fn is_fin(&self) -> bool {
+    pub fn has_fin(&self) -> bool {
         self.flags() & Self::FLAG_FIN != 0
     }
 
     /// Check if SYN flag is set
     #[inline]
-    pub fn is_syn(&self) -> bool {
+    pub fn has_syn(&self) -> bool {
         self.flags() & Self::FLAG_SYN != 0
     }
 
     /// Check if RST flag is set
     #[inline]
-    pub fn is_rst(&self) -> bool {
+    pub fn has_rst(&self) -> bool {
         self.flags() & Self::FLAG_RST != 0
     }
 
     /// Check if PSH flag is set
     #[inline]
-    pub fn is_psh(&self) -> bool {
+    pub fn has_psh(&self) -> bool {
         self.flags() & Self::FLAG_PSH != 0
     }
 
     /// Check if ACK flag is set
     #[inline]
-    pub fn is_ack(&self) -> bool {
+    pub fn has_ack(&self) -> bool {
         self.flags() & Self::FLAG_ACK != 0
     }
 
     /// Check if URG flag is set
     #[inline]
-    pub fn is_urg(&self) -> bool {
+    pub fn has_urg(&self) -> bool {
         self.flags() & Self::FLAG_URG != 0
     }
 
     /// Check if ECE flag is set
     #[inline]
-    pub fn is_ece(&self) -> bool {
+    pub fn has_ece(&self) -> bool {
         self.flags() & Self::FLAG_ECE != 0
     }
 
     /// Check if CWR flag is set
     #[inline]
-    pub fn is_cwr(&self) -> bool {
+    pub fn has_cwr(&self) -> bool {
         self.flags() & Self::FLAG_CWR != 0
     }
 
@@ -241,28 +241,28 @@ impl TcpHeader {
     /// Returns a string representation of active flags
     pub fn flags_string(&self) -> SmolStr {
         let mut result = SmolStrBuilder::new();
-        if self.is_fin() {
+        if self.has_fin() {
             result.push('F');
         }
-        if self.is_syn() {
+        if self.has_syn() {
             result.push('S');
         }
-        if self.is_rst() {
+        if self.has_rst() {
             result.push('R');
         }
-        if self.is_psh() {
+        if self.has_psh() {
             result.push('P');
         }
-        if self.is_ack() {
+        if self.has_ack() {
             result.push('A');
         }
-        if self.is_urg() {
+        if self.has_urg() {
             result.push('U');
         }
-        if self.is_ece() {
+        if self.has_ece() {
             result.push('E');
         }
-        if self.is_cwr() {
+        if self.has_cwr() {
             result.push('C');
         }
         result.finish()
@@ -387,8 +387,8 @@ mod tests {
 
         assert_eq!(header.data_offset(), 5);
         assert_eq!(header.total_len(&buf), 20);
-        assert!(header.is_syn());
-        assert!(!header.is_ack());
+        assert!(header.has_syn());
+        assert!(!header.has_ack());
         assert!(header.is_valid());
     }
 

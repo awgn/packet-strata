@@ -6,7 +6,10 @@ use std::{
 use chrono::TimeDelta;
 
 use crate::{
-    packet::{ether::EthAddr, icmp::IcmpType, protocol::EtherProto},
+    packet::{
+        ether::EthAddr, header::TransportLayer, icmp::IcmpType, icmp6::Icmp6Type,
+        protocol::EtherProto, Packet,
+    },
     timestamp::Timestamp,
     tracker::Trackable,
 };
@@ -91,6 +94,12 @@ impl Termination {
     #[must_use]
     pub fn is_timeout(&self) -> bool {
         matches!(self, Termination::Timeout)
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn is_icmp(&self) -> bool {
+        matches!(self, Termination::Icmp4 { .. }) || matches!(self, Termination::Icmp6 { .. })
     }
 
     #[inline]
@@ -184,7 +193,7 @@ pub struct IpInfo {
     d_lost: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TcpInfo {
     /// Timestamp of the initial SYN packet.
     ts_syn: Timestamp,
@@ -224,16 +233,16 @@ pub struct Flow<Tuple, T> {
     pub termination: Termination,
 
     /// IP layer statistics and info.
-    pub ip_info: Option<IpInfo>,
+    pub ip_info: IpInfo,
 
     /// TCP layer statistics and info (optional).
-    pub tcp_info: Option<TcpInfo>,
+    pub tcp_info: TcpInfo,
 
     /// Timestamp of the first packet in the flow.
     pub start_ts: Timestamp,
 
     /// Timestamp of the last packet in the flow.
-    pub end_ts: Timestamp,
+    pub last_ts: Timestamp,
 
     /// Source MAC address.
     pub src_mac: EthAddr,
@@ -281,6 +290,37 @@ pub struct Flow<Tuple, T> {
     pub data: T,
 }
 
+
+impl<A, T> Flow<A, T>
+where
+    A: Default,
+    T: Default,
+{
+    pub fn new(timestamp: Timestamp, pkt: &Packet<'_>) -> Self {
+        todo!()
+    }
+}
+
+impl<A, T> Flow<A, T> {
+    fn add_packet(&mut self, timestamp: Timestamp, len: usize, pkt: &Packet<'_>) {
+        self.last_ts = timestamp;
+
+        let uplink = true;
+
+        if uplink {
+            self.u_bytes += len;
+            self.u_pkts += 1;
+            self.u_payload_bytes += pkt.data().len();
+            self.u_payload_pkts += (!pkt.data().is_empty()) as u32;
+        } else {
+            self.d_bytes += len;
+            self.d_pkts += 1;
+            self.d_payload_bytes += pkt.data().len();
+            self.d_payload_pkts += (!pkt.data().is_empty()) as u32;
+        }
+    }
+}
+
 impl<A, T> Trackable for Flow<A, T> {
     type Timestamp = Timestamp;
 
@@ -289,7 +329,7 @@ impl<A, T> Trackable for Flow<A, T> {
     }
 
     fn set_timestamp(&mut self, ts: Self::Timestamp) {
-        self.end_ts = ts;
+        self.last_ts = ts;
     }
 }
 
