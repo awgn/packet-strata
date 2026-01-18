@@ -148,45 +148,6 @@ impl Display for Termination {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum FlowType {
-    #[default]
-    /// Unspecified or unknown flow type.
-    Unspec,
-    /// Uplink traffic (e.g., from subscriber to network).
-    Uplink,
-    /// Downlink traffic (e.g., from network to subscriber).
-    Downlink,
-    /// Internal LAN traffic.
-    Inner,
-    /// External LAN traffic.
-    Outer,
-    /// Link-local traffic.
-    Linklocal,
-    /// Broadcast traffic.
-    Broadcast,
-    /// Multicast traffic.
-    Multicast,
-    /// Loopback traffic.
-    Loopback,
-}
-
-impl Display for FlowType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FlowType::Unspec => write!(f, "unspecified"),
-            FlowType::Uplink => write!(f, "uplink"),
-            FlowType::Downlink => write!(f, "downlink"),
-            FlowType::Inner => write!(f, "inner"),
-            FlowType::Outer => write!(f, "outer"),
-            FlowType::Linklocal => write!(f, "link-local"),
-            FlowType::Broadcast => write!(f, "broadcast"),
-            FlowType::Multicast => write!(f, "multicast"),
-            FlowType::Loopback => write!(f, "loopback"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct IpInfo {
     /// Uplink IP identification.
     u_id: Option<u16>,
@@ -248,9 +209,6 @@ pub struct Flow<T, D> {
 
     /// Generic address tuple (e.g. TupleV4, TupleV6 or TupleL2)
     pub tuple: T,
-
-    /// Flow classification (Uplink, Downlink, etc.).
-    pub r#type: FlowType,
 
     /// Reason for flow termination.
     pub termination: Termination,
@@ -347,8 +305,8 @@ where
     #[inline]
     pub fn packet_dir(&self, pkt: &Packet<'_>) -> PacketDirection {
         if self.tuple.is_symmetric() {
-            // to disguise a very loopback packet (e.g. icmp localhost),
-            // we need to infer the direction from the packet itself
+            // Loopback packets (e.g., ICMP on localhost) require inferring
+            // the direction from the packet itself.
             return PacketDirection::infer(pkt);
         }
 
@@ -388,11 +346,45 @@ where
             self.u_pkts += 1;
             self.u_payload_bytes += pkt.data().len();
             self.u_payload_pkts += (!pkt.data().is_empty()) as u32;
+
+            if let Some(NetworkLayer::Ipv4(h)) = pkt.network() {
+                if !h.has_dont_fragment() {
+                    let id = h.header.id();
+                    if self.ip_info.u_id.is_none() {
+                        self.ip_info.u_id = Some(id);
+                    }
+
+                    let delta = id.wrapping_sub(self.ip_info.u_id.unwrap());
+                    self.ip_info.u_lost += if delta > 0 && delta < 128 {
+                        delta - 1
+                    } else {
+                        0
+                    } as u32;
+                    self.ip_info.u_id = Some(id);
+                }
+            }
         } else {
             self.d_bytes += meta.caplen() as usize;
             self.d_pkts += 1;
             self.d_payload_bytes += pkt.data().len();
             self.d_payload_pkts += (!pkt.data().is_empty()) as u32;
+
+            if let Some(NetworkLayer::Ipv4(h)) = pkt.network() {
+                if !h.has_dont_fragment() {
+                    let id = h.header.id();
+                    if self.ip_info.d_id.is_none() {
+                        self.ip_info.d_id = Some(id);
+                    }
+
+                    let delta = id.wrapping_sub(self.ip_info.d_id.unwrap());
+                    self.ip_info.d_lost += if delta > 0 && delta < 128 {
+                        delta - 1
+                    } else {
+                        0
+                    } as u32;
+                    self.ip_info.d_id = Some(id);
+                }
+            }
         }
 
         self.data.process(meta, pkt, dir);

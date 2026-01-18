@@ -148,6 +148,11 @@ impl Ipv4Header {
         self.ver_ihl & 0x0F
     }
 
+    const OFFSET_MASK: u16 = 0x1FFF;
+    const MF_FLAG_MASK: u16 = 0x2000;
+    const DF_FLAG_MASK: u16 = 0x4000;
+    const RS_FLAG_MASK: u16 = 0x8000;
+
     #[inline]
     pub fn flags(&self) -> u8 {
         (self.flags_frag_offset.get() >> 13) as u8
@@ -155,12 +160,44 @@ impl Ipv4Header {
 
     #[inline]
     pub fn fragment_offset(&self) -> u16 {
-        self.flags_frag_offset.get() & 0x1FFF
+        self.flags_frag_offset.get() & Self::OFFSET_MASK
     }
 
     #[inline]
-    pub fn is_fragmented(&self) -> bool {
-        (self.flags() & 0x01) != 0 || self.fragment_offset() != 0
+    pub fn has_dont_fragment(&self) -> bool {
+        // Check bit 14 directly (0x4000)
+        (self.flags_frag_offset.get() & Self::DF_FLAG_MASK) != 0
+    }
+
+    #[inline]
+    pub fn has_more_fragment(&self) -> bool {
+        // Check bit 14 directly (0x4000)
+        (self.flags_frag_offset.get() & Self::MF_FLAG_MASK) != 0
+    }
+
+    #[inline]
+    pub fn has_reserved_flag(&self) -> bool {
+        (self.flags_frag_offset.get() & Self::RS_FLAG_MASK) != 0
+    }
+
+    #[inline]
+    pub fn is_fragmenting(&self) -> bool {
+        // A packet is a fragment if MF is set (0x2000) OR offset is non-zero (0x1FFF).
+        (self.flags_frag_offset.get() & Self::MF_FLAG_MASK | Self::OFFSET_MASK) != 0
+    }
+
+    #[inline]
+    pub fn is_first_fragment(&self) -> bool {
+        // First fragment: MF set AND offset is 0
+        let raw = self.flags_frag_offset.get();
+        (raw & Self::MF_FLAG_MASK) != 0 && (raw & Self::OFFSET_MASK) == 0
+    }
+
+    #[inline]
+    pub fn is_last_fragment(&self) -> bool {
+        // Last fragment: MF NOT set AND offset > 0
+        let raw = self.flags_frag_offset.get();
+        (raw & Self::MF_FLAG_MASK) == 0 && (raw & Self::OFFSET_MASK) != 0
     }
 
     #[inline]
@@ -203,6 +240,11 @@ impl Ipv4Header {
     #[inline]
     pub fn has_options(&self) -> bool {
         self.ihl() > 5
+    }
+
+    #[inline]
+    pub fn id(&self) -> u16 {
+        self.identification.get()
     }
 }
 
@@ -273,7 +315,7 @@ impl fmt::Display for Ipv4Header {
             self.total_length()
         )?;
 
-        if self.is_fragmented() {
+        if self.is_fragmenting() {
             write!(f, " frag offset={}", self.fragment_offset())?;
         }
 
