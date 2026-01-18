@@ -114,9 +114,6 @@ pub struct Flow<T, D> {
     /// Generic address tuple (e.g. TupleV4, TupleV6 or TupleL2)
     pub tuple: T,
 
-    /// Reason for flow termination.
-    pub termination: Termination,
-
     /// IP layer statistics and info.
     pub ip_info: IpInfo,
 
