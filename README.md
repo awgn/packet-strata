@@ -1,8 +1,12 @@
 # Packet Strata
 
-> **Disclaimer**: Questa libreria è in piena fase di sviluppo e potrebbe ricevere aggiornamenti che ne rompono la compatibilità. Se vuoi contribuire, apri una PR su GitHub. Quando il progetto avrà raggiunto una certa maturità, questo disclaimer sarà rimosso.
-
 A high-performance packet parsing library and PCAP reader for Rust.
+
+## ⚠️ Disclaimer
+
+**This library is under active development.** Breaking changes may occur between versions as the API evolves and stabilizes. 
+
+If you're using or experimenting with this library and encounter bugs or develop interesting features, please consider opening a pull request at https://github.com/awgn/packet-strata
 
 ## Workspace Structure
 
