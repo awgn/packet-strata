@@ -9,7 +9,7 @@ use packet_strata::tracker::tuple::{Symmetric, TupleV4, TupleV6};
 use crate::stats::{LocalStats, Stats, FLUSH_INTERVAL};
 use crate::{Args, FlowTracker};
 use packet_strata::metadata::PacketMetadata;
-use packet_strata::tracker::process::Process;
+
 
 /// Process a single packet using the PacketIter iterator
 ///
