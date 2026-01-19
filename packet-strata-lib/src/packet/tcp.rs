@@ -56,8 +56,8 @@
 //! let (header, payload) = TcpHeader::from_bytes(&packet).unwrap();
 //! assert_eq!(header.src_port(), 8080);
 //! assert_eq!(header.dst_port(), 80);
-//! assert!(header.is_syn());
-//! assert!(!header.is_ack());
+//! assert!(header.has_syn());
+//! assert!(!header.has_ack());
 //! assert_eq!(header.window_size(), 65535);
 //! ```
 //!
@@ -82,8 +82,8 @@
 //! ];
 //!
 //! let (header, payload) = TcpHeader::from_bytes(&packet).unwrap();
-//! assert!(header.is_syn());
-//! assert!(header.is_ack());
+//! assert!(header.has_syn());
+//! assert!(header.has_ack());
 //! assert_eq!(header.data_offset(), 6);
 //! assert_eq!(header.data_offset() as usize * 4, 24);  // Header length in bytes
 //! ```

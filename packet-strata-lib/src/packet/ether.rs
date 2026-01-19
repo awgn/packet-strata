@@ -46,7 +46,7 @@
 //! ];
 //!
 //! let (header, payload) = EtherHeader::from_bytes(&packet).unwrap();
-//! assert_eq!(header.proto(), EtherProto::IPV4);
+//! assert_eq!(header.protocol(), EtherProto::IPV4);
 //! assert_eq!(format!("{}", header.dest()), "ff:ff:ff:ff:ff:ff");
 //! assert_eq!(format!("{}", header.source()), "00:11:22:33:44:55");
 //! ```
@@ -67,7 +67,7 @@
 //! ];
 //!
 //! let (header, payload) = EtherHeader::from_bytes(&packet).unwrap();
-//! assert_eq!(header.proto(), EtherProto::ARP);
+//! assert_eq!(header.protocol(), EtherProto::ARP);
 //! assert_eq!(payload.len(), 0);
 //! ```
 

@@ -183,7 +183,7 @@ impl Ipv4Header {
     #[inline]
     pub fn is_fragmenting(&self) -> bool {
         // A packet is a fragment if MF is set (0x2000) OR offset is non-zero (0x1FFF).
-        (self.flags_frag_offset.get() & Self::MF_FLAG_MASK | Self::OFFSET_MASK) != 0
+        (self.flags_frag_offset.get() & (Self::MF_FLAG_MASK | Self::OFFSET_MASK)) != 0
     }
 
     #[inline]
@@ -389,13 +389,13 @@ mod tests {
         header.flags_frag_offset = U16::new(0x4000); // Don't Fragment flag
         assert_eq!(header.flags(), 0x02);
         assert_eq!(header.fragment_offset(), 0);
-        assert!(!header.is_fragmented());
+        assert!(!header.is_fragmenting());
 
         // With fragmentation: offset = 185 (0x00B9), More Fragments flag
         header.flags_frag_offset = U16::new(0x20B9);
         assert_eq!(header.flags(), 0x01); // More Fragments
         assert_eq!(header.fragment_offset(), 185);
-        assert!(header.is_fragmented());
+        assert!(header.is_fragmenting());
     }
 
     #[test]
