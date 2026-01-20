@@ -189,7 +189,7 @@ impl EtherHeader {
     }
 }
 
-#[repr(C, packed)]
+#[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 struct EtherHeaderFixed(EtherHeader);
 

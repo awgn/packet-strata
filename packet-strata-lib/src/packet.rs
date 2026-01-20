@@ -558,7 +558,7 @@ impl<'a> Packet<'a> {
                 let (icmp, rest) = IcmpHeader::from_bytes(buf)?;
                 Ok(TransportResult::Icmp(icmp, rest))
             }
-            IpProto::ICMP6 => {
+            IpProto::IPV6_ICMP => {
                 let (icmp6, rest) = Icmp6Header::from_bytes(buf)?;
                 Ok(TransportResult::Icmp6(icmp6, rest))
             }

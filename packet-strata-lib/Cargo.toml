@@ -22,3 +22,8 @@ thiserror.workspace = true
 zerocopy.workspace = true
 serde.workspace = true
 chrono.workspace = true
+paste = "1.0.15"
+strum = { version = "0.27.2", features = ["derive"] }
+
+[features]
+strata_protocol_names = []

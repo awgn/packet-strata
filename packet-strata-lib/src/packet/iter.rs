@@ -577,7 +577,7 @@ impl<'a> PacketIter<'a> {
                     Some(Err(e))
                 }
             },
-            IpProto::ICMP6 => match Icmp6Header::from_bytes(self.remaining) {
+            IpProto::IPV6_ICMP => match Icmp6Header::from_bytes(self.remaining) {
                 Ok((icmp6, rest)) => {
                     self.remaining = rest;
                     self.next_layer = NextLayer::Done;

@@ -13,6 +13,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TcpStatus {
     #[default]
     /// Initial state, or when tracking metadata is evicted/expired.

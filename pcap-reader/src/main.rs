@@ -57,6 +57,8 @@ fn main() {
     let stats = stats::Stats::default();
     let mut flow_tracker = FlowTracker::new();
 
+    let now = std::time::Instant::now();
+
     // Read and process PCAP file
     info!("Reading PCAP file: {:?}", args.pcap);
     if let Err(e) = process_pcap(&args.pcap, &args, &stats, &mut flow_tracker) {
@@ -74,7 +76,7 @@ fn main() {
         println!("VNI mapping: {}", flow_tracker.vni_mapper.len());
     }
 
-    info!("PCAP processing completed!");
+    info!("PCAP processing completed ({:?})", now.elapsed());
 }
 
 struct FlowTracker {
