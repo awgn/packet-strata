@@ -35,19 +35,18 @@ impl<'a> PacketMetadata for EnhancedPacketBlock<'a> {
     #[inline]
     fn timestamp(&self) -> Timestamp {
         let raw_ts = ((self.ts_high as u64) << 32) | (self.ts_low as u64);
-        let maybe_ns = raw_ts / 1_000_000_000;
 
-        // Heuristic Thresholds:
-        // Lower: 100_000_000 (Year 1973).
-        //        Safe because modern microsecond timestamps / 10^9 result in ~1.7 million,
-        //        which is well below this 100 million threshold.
-        // Upper: 4_300_000_000 (Year 2106).
-        //        Prevents u32 overflow.
+        // Try to determine if timestamp is microseconds or nanoseconds.
+        // Modern timestamps (e.g. 2024) in microseconds are ~1.7e15
+        // In nanoseconds they are ~1.7e18
+        // We use a threshold of 1e16 to distinguish.
 
-        if (100_000_000..=4_000_000_000).contains(&maybe_ns) {
-            Timestamp(raw_ts)
-        } else {
+        if raw_ts < 10_000_000_000_000_000 {
+            // microseconds, convert to nanoseconds
             Timestamp(raw_ts * 1000)
+        } else {
+            // nanoseconds
+            Timestamp(raw_ts)
         }
     }
 
