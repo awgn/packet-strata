@@ -1,6 +1,36 @@
 use crate::packet::{header::TransportLayer, icmp::IcmpType, icmp6::Icmp6Type, Packet};
 use std::fmt;
 
+// Well-known ports
+const PORT_DNS: u16 = 53;
+const PORT_DHCP_SERVER: u16 = 67;
+const PORT_DHCP_CLIENT: u16 = 68;
+const PORT_NTP: u16 = 123;
+const PORT_NETBIOS_NS: u16 = 137;
+const PORT_NETBIOS_DGM: u16 = 138;
+const PORT_SNMP: u16 = 161;
+const PORT_SNMP_TRAP: u16 = 162;
+const PORT_CLDAP: u16 = 389;
+const PORT_HTTPS: u16 = 443;
+const PORT_IKE: u16 = 500;
+const PORT_SYSLOG: u16 = 514;
+const PORT_RIP: u16 = 520;
+const PORT_DHCPV6_CLIENT: u16 = 546;
+const PORT_DHCPV6_SERVER: u16 = 547;
+const PORT_OPENVPN: u16 = 1194;
+const PORT_SSDP: u16 = 1900;
+const PORT_IPSEC_NATT: u16 = 4500;
+const PORT_MDNS: u16 = 5353;
+const PORT_LLMNR: u16 = 5355;
+const PORT_HTTPS_ALT: u16 = 8443;
+
+// Protocol constants
+const DNS_QR_BIT_MASK: u8 = 0x80;
+const NTP_MODE_MASK: u8 = 0x07;
+const TLS_HANDSHAKE_CONTENT_TYPE: u8 = 0x16;
+const TLS_CLIENT_HELLO: u8 = 0x01;
+const TLS_SERVER_HELLO: u8 = 0x02;
+
 /// Represents the direction of a packet in a flow.
 ///
 /// Direction is determined from the perspective of the client-server model:
@@ -129,24 +159,24 @@ impl PacketDirection {
         // --- 1. Minimal DPI (port + max 2 bytes) ---
 
         // DHCP (Client 68 <-> Server 67)
-        if source == 68 && dest == 67 {
+        if source == PORT_DHCP_CLIENT && dest == PORT_DHCP_SERVER {
             return PacketDirection::Upwards;
         }
-        if source == 67 && dest == 68 {
+        if source == PORT_DHCP_SERVER && dest == PORT_DHCP_CLIENT {
             return PacketDirection::Downwards;
         }
 
         // DHCPv6 (Client 546 <-> Server 547)
-        if source == 546 && dest == 547 {
+        if source == PORT_DHCPV6_CLIENT && dest == PORT_DHCPV6_SERVER {
             return PacketDirection::Upwards;
         }
-        if source == 547 && dest == 546 {
+        if source == PORT_DHCPV6_SERVER && dest == PORT_DHCPV6_CLIENT {
             return PacketDirection::Downwards;
         }
 
         // DNS - QR bit in flags (byte 2, bit 7)
-        if (source == 53 || dest == 53) && source != dest && data.len() >= 3 {
-            let is_response = (data[2] & 0x80) != 0;
+        if (source == PORT_DNS || dest == PORT_DNS) && source != dest && data.len() >= 3 {
+            let is_response = (data[2] & DNS_QR_BIT_MASK) != 0;
             return if is_response {
                 PacketDirection::Downwards
             } else {
@@ -155,14 +185,14 @@ impl PacketDirection {
         }
 
         // NTP - Mode field in byte 0 (bits 0-2)
-        if (source == 123 || dest == 123) && !data.is_empty() {
-            let mode = data[0] & 0x07;
+        if (source == PORT_NTP || dest == PORT_NTP) && !data.is_empty() {
+            let mode = data[0] & NTP_MODE_MASK;
             return match mode {
                 1 | 3 => PacketDirection::Upwards, // Symmetric Active, Client
                 2 | 4 | 5 => PacketDirection::Downwards, // Symmetric Passive, Server, Broadcast
                 _ => {
                     // Fall through to port-based logic
-                    if dest == 123 {
+                    if dest == PORT_NTP {
                         PacketDirection::Upwards
                     } else {
                         PacketDirection::Downwards
@@ -174,21 +204,21 @@ impl PacketDirection {
         // --- 2. Payload Length Heuristic for Symmetric Traffic ---
         if source == dest {
             let threshold = match source {
-                53 => Some(64),    // DNS (queries typically < 64 bytes)
-                123 => Some(48),   // NTP (request = 48 bytes exactly in v3/v4)
-                137 => Some(60),   // NetBIOS Name Service
-                138 => Some(100),  // NetBIOS Datagram
-                161 => Some(80),   // SNMP
-                162 => Some(80),   // SNMP Traps
-                389 => Some(150),  // CLDAP
-                500 => Some(200),  // IKE (initiator packets often smaller in phase 1)
-                514 => Some(200),  // Syslog (assume larger = more log data = server aggregating)
-                520 => Some(60),   // RIP (requests are smaller)
-                1194 => Some(100), // OpenVPN
-                1900 => Some(200), // SSDP (M-SEARCH requests are small)
-                4500 => Some(200), // IPsec NAT-T
-                5353 => Some(80),  // mDNS
-                5355 => Some(64),  // LLMNR
+                PORT_DNS => Some(64),        // DNS (queries typically < 64 bytes)
+                PORT_NTP => Some(48),        // NTP (request = 48 bytes exactly in v3/v4)
+                PORT_NETBIOS_NS => Some(60), // NetBIOS Name Service
+                PORT_NETBIOS_DGM => Some(100), // NetBIOS Datagram
+                PORT_SNMP => Some(80),       // SNMP
+                PORT_SNMP_TRAP => Some(80),  // SNMP Traps
+                PORT_CLDAP => Some(150),     // CLDAP
+                PORT_IKE => Some(200),       // IKE (initiator packets often smaller in phase 1)
+                PORT_SYSLOG => Some(200),    // Syslog (assume larger = more log data = server aggregating)
+                PORT_RIP => Some(60),        // RIP (requests are smaller)
+                PORT_OPENVPN => Some(100),   // OpenVPN
+                PORT_SSDP => Some(200),      // SSDP (M-SEARCH requests are small)
+                PORT_IPSEC_NATT => Some(200), // IPsec NAT-T
+                PORT_MDNS => Some(80),       // mDNS
+                PORT_LLMNR => Some(64),      // LLMNR
                 _ => None,
             };
 
@@ -202,7 +232,7 @@ impl PacketDirection {
         }
 
         // --- 3. Port Rank Logic ---
-        Self::infer_from_ports(source, dest).unwrap_or(PacketDirection::Upwards)
+        Self::infer_direction_from_ports(source, dest).unwrap_or(PacketDirection::Upwards)
     }
 
     /// Simplified TCP direction inference: port-based + minimal DPI (max 2 bytes)
@@ -214,15 +244,15 @@ impl PacketDirection {
         // --- 1. Minimal DPI (port + max 2 bytes) ---
 
         // TLS - ContentType (byte 0) and Handshake type (byte 5)
-        if (source == 443 || dest == 443 || source == 8443 || dest == 8443) && data.len() >= 6 {
-            if data[0] == 0x16 {
+        if (source == PORT_HTTPS || dest == PORT_HTTPS || source == PORT_HTTPS_ALT || dest == PORT_HTTPS_ALT) && data.len() >= 6 {
+            if data[0] == TLS_HANDSHAKE_CONTENT_TYPE {
                 // ContentType 0x16 = Handshake
                 let handshake_type = data[5];
                 return match handshake_type {
-                    0x01 => PacketDirection::Upwards,   // ClientHello
-                    0x02 => PacketDirection::Downwards, // ServerHello
+                    TLS_CLIENT_HELLO => PacketDirection::Upwards,   // ClientHello
+                    TLS_SERVER_HELLO => PacketDirection::Downwards, // ServerHello
                     _ => {
-                        if dest == 443 || dest == 8443 {
+                        if dest == PORT_HTTPS || dest == PORT_HTTPS_ALT {
                             PacketDirection::Upwards
                         } else {
                             PacketDirection::Downwards
@@ -233,8 +263,8 @@ impl PacketDirection {
         }
 
         // DNS over TCP - QR bit at byte 4 (after 2-byte length prefix, then byte 2 of DNS)
-        if (source == 53 || dest == 53) && data.len() >= 5 {
-            let is_response = (data[4] & 0x80) != 0;
+        if (source == PORT_DNS || dest == PORT_DNS) && data.len() >= 5 {
+            let is_response = (data[4] & DNS_QR_BIT_MASK) != 0;
             return if is_response {
                 PacketDirection::Downwards
             } else {
@@ -243,11 +273,11 @@ impl PacketDirection {
         }
 
         // --- 2. Port Rank Logic ---
-        Self::infer_from_ports(source, dest).unwrap_or(PacketDirection::Upwards)
+        Self::infer_direction_from_ports(source, dest).unwrap_or(PacketDirection::Upwards)
     }
 
     /// Infers direction based on port hierarchy: System (≤1024) < User (1025-49151) < Dynamic (>49151)
-    fn infer_from_ports(source: u16, dest: u16) -> Option<PacketDirection> {
+    fn infer_direction_from_ports(source: u16, dest: u16) -> Option<PacketDirection> {
         let get_port_rank = |p: u16| -> u8 {
             if p <= 1024 {
                 0
