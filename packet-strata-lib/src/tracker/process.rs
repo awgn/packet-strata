@@ -22,17 +22,18 @@ pub trait Process {
         meta: &Meta,
         pkt: &Packet<'_>,
         dir: PacketDirection,
-        core: &mut FlowBase<T>,
+        base: &mut FlowBase<T>,
     );
 }
 
 impl Process for () {
+    #[inline(always)]
     fn process<Meta: PacketMetadata, T>(
         &mut self,
         _meta: &Meta,
         _pkt: &Packet<'_>,
         _dir: PacketDirection,
-        _core: &mut FlowBase<T>,
+        _base: &mut FlowBase<T>,
     ) {
     }
 }

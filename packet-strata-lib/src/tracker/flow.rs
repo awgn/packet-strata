@@ -39,9 +39,22 @@ pub enum TcpStatus {
 
     /// Connection reset via RST flag.
     Reset,
+}
 
-    /// State cannot be inferred from the observed packet sequence.
-    Unknown,
+impl TcpStatus {
+    #[inline]
+    #[must_use]
+    pub fn is_established(self) -> bool {
+        matches!(self, TcpStatus::Established)
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn is_close_in_progress(self) -> bool {
+        matches!(self, TcpStatus::FinWait)
+            || matches!(self, TcpStatus::CloseWait)
+            || matches!(self, TcpStatus::Closing)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -134,7 +147,11 @@ impl TcpState {
                 self.status = TcpStatus::Reset;
             } else if hdr.has_fin() {
                 // F
-                self.status = TcpStatus::Closing;
+                if self.status < TcpStatus::FinWait {
+                    self.status = TcpStatus::FinWait;
+                } else if self.status == TcpStatus::FinWait || self.status == TcpStatus::CloseWait {
+                    self.status = TcpStatus::Closing;
+                }
             } else if hdr.has_ack() {
                 if hdr.has_syn() {
                     // S|A
@@ -156,6 +173,8 @@ impl TcpState {
                         if self.ts_syn_ack.0 > 0 {
                             self.rtt_user = self.ts_ack - self.ts_syn_ack;
                         }
+                    } else if matches!(self.status, TcpStatus::FinWait) {
+                        self.status = TcpStatus::CloseWait;
                     } else {
                         if self.status < TcpStatus::Established {
                             if metrics.d_pkts > 0 && metrics.u_pkts > 0 {

@@ -43,11 +43,15 @@ where
     where
         F: FnOnce() -> V,
     {
-        if self.lru.contains_key(key) {
-            self.lru.to_back(key).unwrap()
-        } else {
-            self.lru.entry(key.clone()).or_insert_with(create)
+        // Workaround for Rust borrow checker limitation.
+        // Using a raw pointer avoids the double-lookup and avoids cloning the key on hit.
+        // This is safe because the mutable borrow is strictly disjoint across branches.
+        let lru_ptr = &mut self.lru as *mut LinkedHashMap<K, V, RandomState>;
+        if let Some(v) = unsafe { &mut *lru_ptr }.to_back(key) {
+            return v;
         }
+
+        self.lru.entry(key.clone()).or_insert_with(create)
     }
 
     /// Evict entries based on a predicate function, in lru order
