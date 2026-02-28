@@ -47,14 +47,14 @@ impl PacketDirection {
                     }
                 }
 
-                return Self::infer_by_ports_and_payload_tcp(
+                return Self::infer_direction_tcp(
                     tcp.src_port(),
                     tcp.dst_port(),
                     pkt.data(),
                 );
             }
             Some(TransportLayer::Udp(udp)) => {
-                Self::infer_by_ports_and_payload_udp(udp.src_port(), udp.dst_port(), pkt.data())
+                Self::infer_direction_udp(udp.src_port(), udp.dst_port(), pkt.data())
             }
 
             Some(TransportLayer::Icmp(icmp)) => match icmp.icmp_type() {
@@ -125,7 +125,7 @@ impl PacketDirection {
     /// - DNS: QR bit (byte 2)
     /// - NTP: mode field (byte 0)
     /// - Payload length heuristic for symmetric traffic
-    fn infer_by_ports_and_payload_udp(source: u16, dest: u16, data: &[u8]) -> PacketDirection {
+    fn infer_direction_udp(source: u16, dest: u16, data: &[u8]) -> PacketDirection {
         // --- 1. Minimal DPI (port + max 2 bytes) ---
 
         // DHCP (Client 68 <-> Server 67)
@@ -202,28 +202,7 @@ impl PacketDirection {
         }
 
         // --- 3. Port Rank Logic ---
-        // System ports (≤1024) < User ports (1025-49151) < Dynamic ports (>49151)
-        let get_port_rank = |p: u16| -> u8 {
-            if p <= 1024 {
-                0
-            } else if p <= 49151 {
-                1
-            } else {
-                2
-            }
-        };
-
-        let src_rank = get_port_rank(source);
-        let dst_rank = get_port_rank(dest);
-
-        if src_rank > dst_rank {
-            return PacketDirection::Upwards; // High port → Low port (Client → Server)
-        } else if src_rank < dst_rank {
-            return PacketDirection::Downwards; // Low port → High port (Server → Client)
-        }
-
-        // --- 4. Fallback ---
-        PacketDirection::Upwards
+        Self::infer_from_ports(source, dest).unwrap_or(PacketDirection::Upwards)
     }
 
     /// Simplified TCP direction inference: port-based + minimal DPI (max 2 bytes)
@@ -231,7 +210,7 @@ impl PacketDirection {
     /// DPI Lite checks:
     /// - TLS: ContentType (byte 0) + Handshake type (byte 5)
     /// - DNS over TCP: QR bit (byte 4, after 2-byte length prefix)
-    fn infer_by_ports_and_payload_tcp(source: u16, dest: u16, data: &[u8]) -> PacketDirection {
+    fn infer_direction_tcp(source: u16, dest: u16, data: &[u8]) -> PacketDirection {
         // --- 1. Minimal DPI (port + max 2 bytes) ---
 
         // TLS - ContentType (byte 0) and Handshake type (byte 5)
@@ -264,6 +243,11 @@ impl PacketDirection {
         }
 
         // --- 2. Port Rank Logic ---
+        Self::infer_from_ports(source, dest).unwrap_or(PacketDirection::Upwards)
+    }
+
+    /// Infers direction based on port hierarchy: System (≤1024) < User (1025-49151) < Dynamic (>49151)
+    fn infer_from_ports(source: u16, dest: u16) -> Option<PacketDirection> {
         let get_port_rank = |p: u16| -> u8 {
             if p <= 1024 {
                 0
@@ -278,12 +262,11 @@ impl PacketDirection {
         let dst_rank = get_port_rank(dest);
 
         if src_rank > dst_rank {
-            return PacketDirection::Upwards; // High port → Low port (Client → Server)
+            Some(PacketDirection::Upwards) // High port → Low port (Client → Server)
         } else if src_rank < dst_rank {
-            return PacketDirection::Downwards; // Low port → High port (Server → Client)
+            Some(PacketDirection::Downwards) // Low port → High port (Server → Client)
+        } else {
+            None
         }
-
-        // --- 3. Fallback ---
-        PacketDirection::Upwards
     }
 }
