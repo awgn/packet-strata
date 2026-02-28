@@ -1,5 +1,5 @@
 use crate::packet::{header::TransportLayer, icmp::IcmpType, icmp6::Icmp6Type, Packet};
-use std::fmt;
+use std::{cmp::Ordering, fmt};
 
 // Well-known ports
 const PORT_DNS: u16 = 53;
@@ -77,11 +77,7 @@ impl PacketDirection {
                     }
                 }
 
-                return Self::infer_direction_tcp(
-                    tcp.src_port(),
-                    tcp.dst_port(),
-                    pkt.data(),
-                );
+                return Self::infer_direction_tcp(tcp.src_port(), tcp.dst_port(), pkt.data());
             }
             Some(TransportLayer::Udp(udp)) => {
                 Self::infer_direction_udp(udp.src_port(), udp.dst_port(), pkt.data())
@@ -204,21 +200,21 @@ impl PacketDirection {
         // --- 2. Payload Length Heuristic for Symmetric Traffic ---
         if source == dest {
             let threshold = match source {
-                PORT_DNS => Some(64),        // DNS (queries typically < 64 bytes)
-                PORT_NTP => Some(48),        // NTP (request = 48 bytes exactly in v3/v4)
-                PORT_NETBIOS_NS => Some(60), // NetBIOS Name Service
+                PORT_DNS => Some(64),          // DNS (queries typically < 64 bytes)
+                PORT_NTP => Some(48),          // NTP (request = 48 bytes exactly in v3/v4)
+                PORT_NETBIOS_NS => Some(60),   // NetBIOS Name Service
                 PORT_NETBIOS_DGM => Some(100), // NetBIOS Datagram
-                PORT_SNMP => Some(80),       // SNMP
-                PORT_SNMP_TRAP => Some(80),  // SNMP Traps
-                PORT_CLDAP => Some(150),     // CLDAP
-                PORT_IKE => Some(200),       // IKE (initiator packets often smaller in phase 1)
-                PORT_SYSLOG => Some(200),    // Syslog (assume larger = more log data = server aggregating)
-                PORT_RIP => Some(60),        // RIP (requests are smaller)
-                PORT_OPENVPN => Some(100),   // OpenVPN
-                PORT_SSDP => Some(200),      // SSDP (M-SEARCH requests are small)
+                PORT_SNMP => Some(80),         // SNMP
+                PORT_SNMP_TRAP => Some(80),    // SNMP Traps
+                PORT_CLDAP => Some(150),       // CLDAP
+                PORT_IKE => Some(200),         // IKE (initiator packets often smaller in phase 1)
+                PORT_SYSLOG => Some(200), // Syslog (assume larger = more log data = server aggregating)
+                PORT_RIP => Some(60),     // RIP (requests are smaller)
+                PORT_OPENVPN => Some(100), // OpenVPN
+                PORT_SSDP => Some(200),   // SSDP (M-SEARCH requests are small)
                 PORT_IPSEC_NATT => Some(200), // IPsec NAT-T
-                PORT_MDNS => Some(80),       // mDNS
-                PORT_LLMNR => Some(64),      // LLMNR
+                PORT_MDNS => Some(80),    // mDNS
+                PORT_LLMNR => Some(64),   // LLMNR
                 _ => None,
             };
 
@@ -244,12 +240,17 @@ impl PacketDirection {
         // --- 1. Minimal DPI (port + max 2 bytes) ---
 
         // TLS - ContentType (byte 0) and Handshake type (byte 5)
-        if (source == PORT_HTTPS || dest == PORT_HTTPS || source == PORT_HTTPS_ALT || dest == PORT_HTTPS_ALT) && data.len() >= 6 {
+        if (source == PORT_HTTPS
+            || dest == PORT_HTTPS
+            || source == PORT_HTTPS_ALT
+            || dest == PORT_HTTPS_ALT)
+            && data.len() >= 6
+        {
             if data[0] == TLS_HANDSHAKE_CONTENT_TYPE {
                 // ContentType 0x16 = Handshake
                 let handshake_type = data[5];
                 return match handshake_type {
-                    TLS_CLIENT_HELLO => PacketDirection::Upwards,   // ClientHello
+                    TLS_CLIENT_HELLO => PacketDirection::Upwards, // ClientHello
                     TLS_SERVER_HELLO => PacketDirection::Downwards, // ServerHello
                     _ => {
                         if dest == PORT_HTTPS || dest == PORT_HTTPS_ALT {
@@ -277,26 +278,30 @@ impl PacketDirection {
     }
 
     /// Infers direction based on port hierarchy: System (≤1024) < User (1025-49151) < Dynamic (>49151)
+    /// Falls back to absolute port number comparison if ranks are equal
     fn infer_direction_from_ports(source: u16, dest: u16) -> Option<PacketDirection> {
-        let get_port_rank = |p: u16| -> u8 {
-            if p <= 1024 {
-                0
-            } else if p <= 49151 {
-                1
-            } else {
-                2
+        if source == dest {
+            return None; // Could not determine direction from identical ports.
+        }
+
+        let port_rank = |p: u16| -> u8 {
+            match p {
+                0..=1024 => 0,
+                1025..=49151 => 1,
+                49152..=u16::MAX => 2,
             }
         };
 
-        let src_rank = get_port_rank(source);
-        let dst_rank = get_port_rank(dest);
-
-        if src_rank > dst_rank {
-            Some(PacketDirection::Upwards) // High port → Low port (Client → Server)
-        } else if src_rank < dst_rank {
-            Some(PacketDirection::Downwards) // Low port → High port (Server → Client)
-        } else {
-            None
+        match port_rank(source).cmp(&port_rank(dest)) {
+            Ordering::Greater => Some(PacketDirection::Upwards), // Client (high rank) → Server (low rank)
+            Ordering::Less => Some(PacketDirection::Downwards), // Server (low rank) → Client (high rank)
+            Ordering::Equal => {
+                if source > dest {
+                    Some(PacketDirection::Upwards)
+                } else {
+                    Some(PacketDirection::Downwards)
+                }
+            }
         }
     }
 }
