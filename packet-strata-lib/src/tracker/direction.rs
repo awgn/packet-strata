@@ -23,6 +23,10 @@ const PORT_IPSEC_NATT: u16 = 4500;
 const PORT_MDNS: u16 = 5353;
 const PORT_LLMNR: u16 = 5355;
 const PORT_HTTPS_ALT: u16 = 8443;
+const PORT_HTTP: u16 = 80;
+const PORT_HTTP_ALT: u16 = 8080;
+const PORT_STUN: u16 = 3478;
+const PORT_STUN_TLS: u16 = 5349;
 
 // Protocol constants
 const DNS_QR_BIT_MASK: u8 = 0x80;
@@ -152,52 +156,69 @@ impl PacketDirection {
     /// - NTP: mode field (byte 0)
     /// - Payload length heuristic for symmetric traffic
     fn infer_direction_udp(source: u16, dest: u16, data: &[u8]) -> PacketDirection {
-        // --- 1. Minimal DPI (port + max 2 bytes) ---
-
-        // DHCP (Client 68 <-> Server 67)
-        if source == PORT_DHCP_CLIENT && dest == PORT_DHCP_SERVER {
-            return PacketDirection::Upwards;
-        }
-        if source == PORT_DHCP_SERVER && dest == PORT_DHCP_CLIENT {
-            return PacketDirection::Downwards;
-        }
-
-        // DHCPv6 (Client 546 <-> Server 547)
-        if source == PORT_DHCPV6_CLIENT && dest == PORT_DHCPV6_SERVER {
-            return PacketDirection::Upwards;
-        }
-        if source == PORT_DHCPV6_SERVER && dest == PORT_DHCPV6_CLIENT {
-            return PacketDirection::Downwards;
+        // --- 1. Exact Port Pairs ---
+        match (source, dest) {
+            (PORT_DHCP_CLIENT, PORT_DHCP_SERVER) | (PORT_DHCPV6_CLIENT, PORT_DHCPV6_SERVER) => {
+                return PacketDirection::Upwards;
+            }
+            (PORT_DHCP_SERVER, PORT_DHCP_CLIENT) | (PORT_DHCPV6_SERVER, PORT_DHCPV6_CLIENT) => {
+                return PacketDirection::Downwards;
+            }
+            _ => {}
         }
 
-        // DNS - QR bit in flags (byte 2, bit 7)
-        if (source == PORT_DNS || dest == PORT_DNS) && source != dest && data.len() >= 3 {
+        // --- 2. Minimal DPI ---
+
+        // Extended DNS family (DNS, mDNS, LLMNR, NetBIOS NS)
+        if (matches!(source, PORT_DNS | PORT_MDNS | PORT_LLMNR | PORT_NETBIOS_NS)
+            || matches!(dest, PORT_DNS | PORT_MDNS | PORT_LLMNR | PORT_NETBIOS_NS))
+            && source != dest
+            && data.len() >= 3
+        {
             let is_response = (data[2] & DNS_QR_BIT_MASK) != 0;
-            return if is_response {
-                PacketDirection::Downwards
-            } else {
-                PacketDirection::Upwards
-            };
+            return if is_response { PacketDirection::Downwards } else { PacketDirection::Upwards };
+        }
+
+        // SSDP (UDP 1900)
+        if (source == PORT_SSDP || dest == PORT_SSDP) && data.len() >= 8 {
+            if data.starts_with(b"HTTP/1.") {
+                return PacketDirection::Downwards;
+            }
+            if data.starts_with(b"M-SE") {
+                return PacketDirection::Upwards;
+            }
+        }
+
+        // QUIC (UDP 443)
+        if (source == PORT_HTTPS || dest == PORT_HTTPS) && data.len() >= 1200 {
+            if (data[0] & 0xC0) == 0xC0 {
+                return PacketDirection::Upwards;
+            }
+        }
+
+        // STUN / WebRTC (UDP 3478, 5349)
+        if (source == PORT_STUN || dest == PORT_STUN || source == PORT_STUN_TLS || dest == PORT_STUN_TLS) && data.len() >= 20 {
+            if (data[0] & 0xC0) == 0x00 {
+                let msg_type = ((data[0] as u16) << 8) | (data[1] as u16);
+                let is_response = (msg_type & 0x0110) != 0;
+                return if is_response { PacketDirection::Downwards } else { PacketDirection::Upwards };
+            }
         }
 
         // NTP - Mode field in byte 0 (bits 0-2)
         if (source == PORT_NTP || dest == PORT_NTP) && !data.is_empty() {
-            let mode = data[0] & NTP_MODE_MASK;
-            return match mode {
-                1 | 3 => PacketDirection::Upwards, // Symmetric Active, Client
-                2 | 4 | 5 => PacketDirection::Downwards, // Symmetric Passive, Server, Broadcast
+            match data[0] & NTP_MODE_MASK {
+                1 | 3 => return PacketDirection::Upwards,   // Symmetric Active, Client
+                2 | 4 | 5 => return PacketDirection::Downwards, // Symmetric Passive, Server, Broadcast
                 _ => {
-                    // Fall through to port-based logic
-                    if dest == PORT_NTP {
-                        PacketDirection::Upwards
-                    } else {
-                        PacketDirection::Downwards
+                    if source != dest {
+                        return if dest == PORT_NTP { PacketDirection::Upwards } else { PacketDirection::Downwards };
                     }
                 }
-            };
+            }
         }
 
-        // --- 2. Payload Length Heuristic for Symmetric Traffic ---
+        // --- 3. Payload Length Heuristic for Symmetric Traffic ---
         if source == dest {
             let threshold = match source {
                 PORT_DNS => Some(64),          // DNS (queries typically < 64 bytes)
@@ -227,7 +248,7 @@ impl PacketDirection {
             }
         }
 
-        // --- 3. Port Rank Logic ---
+        // --- 4. Port Rank Logic ---
         Self::infer_direction_from_ports(source, dest).unwrap_or(PacketDirection::Upwards)
     }
 
@@ -238,6 +259,16 @@ impl PacketDirection {
     /// - DNS over TCP: QR bit (byte 4, after 2-byte length prefix)
     fn infer_direction_tcp(source: u16, dest: u16, data: &[u8]) -> PacketDirection {
         // --- 1. Minimal DPI (port + max 2 bytes) ---
+
+        // HTTP (TCP 80, 8080)
+        if (source == PORT_HTTP || dest == PORT_HTTP || source == PORT_HTTP_ALT || dest == PORT_HTTP_ALT) && data.len() >= 8 {
+            if data.starts_with(b"HTTP/1.") {
+                return PacketDirection::Downwards;
+            }
+            if data.starts_with(b"GET ") || data.starts_with(b"POST") || data.starts_with(b"PUT ") || data.starts_with(b"HEAD") {
+                return PacketDirection::Upwards;
+            }
+        }
 
         // TLS - ContentType (byte 0) and Handshake type (byte 5)
         if (source == PORT_HTTPS
