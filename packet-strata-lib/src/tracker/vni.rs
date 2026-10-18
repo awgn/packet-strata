@@ -615,13 +615,13 @@ impl VniMapper {
     /// # Returns
     ///
     /// A `VniId` that uniquely identifies this layer stack
+    #[inline]
     pub fn get_or_create_vni_id(&mut self, vni_stack: &[VniLayer]) -> VniId {
-        let stack_vec: SmallVec<[VniLayer; 4]> = vni_stack.iter().cloned().collect();
-
-        if let Some(&id) = self.forward.get(&stack_vec) {
+        if let Some(&id) = self.forward.get(vni_stack) {
             return id;
         }
 
+        let stack_vec: SmallVec<[VniLayer; 4]> = vni_stack.iter().cloned().collect();
         self.counter += 1;
         let id = VniId(self.counter);
 

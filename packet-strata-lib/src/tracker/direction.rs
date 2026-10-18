@@ -68,6 +68,7 @@ impl PacketDirection {
     /// - **ICMP**: Message types (e.g., Echo Request vs Echo Reply).
     ///
     /// If the direction cannot be definitively determined, it defaults to `Upwards`.
+    #[inline]
     pub fn infer(pkt: &Packet<'_>) -> PacketDirection {
         let transport = pkt.transport();
         match transport {
@@ -81,8 +82,9 @@ impl PacketDirection {
                     }
                 }
 
-                return Self::infer_direction_tcp(tcp.src_port(), tcp.dst_port(), pkt.data());
+                Self::infer_direction_tcp(tcp.src_port(), tcp.dst_port(), pkt.data())
             }
+            Some(TransportLayer::Sctp(_)) | None => PacketDirection::Upwards,
             Some(TransportLayer::Udp(udp)) => {
                 Self::infer_direction_udp(udp.src_port(), udp.dst_port(), pkt.data())
             }
@@ -144,7 +146,6 @@ impl PacketDirection {
                 Icmp6Type::EXTENDED_ECHO_REPLY => PacketDirection::Downwards,
                 _ => PacketDirection::Upwards,
             },
-            Some(TransportLayer::Sctp(_)) | None => PacketDirection::Upwards,
         }
     }
 
@@ -155,6 +156,7 @@ impl PacketDirection {
     /// - DNS: QR bit (byte 2)
     /// - NTP: mode field (byte 0)
     /// - Payload length heuristic for symmetric traffic
+    #[inline]
     fn infer_direction_udp(source: u16, dest: u16, data: &[u8]) -> PacketDirection {
         // --- 1. Exact Port Pairs ---
         match (source, dest) {
@@ -257,6 +259,7 @@ impl PacketDirection {
     /// DPI Lite checks:
     /// - TLS: ContentType (byte 0) + Handshake type (byte 5)
     /// - DNS over TCP: QR bit (byte 4, after 2-byte length prefix)
+    #[inline]
     fn infer_direction_tcp(source: u16, dest: u16, data: &[u8]) -> PacketDirection {
         // --- 1. Minimal DPI (port + max 2 bytes) ---
 
@@ -310,6 +313,7 @@ impl PacketDirection {
 
     /// Infers direction based on port hierarchy: System (≤1024) < User (1025-49151) < Dynamic (>49151)
     /// Falls back to absolute port number comparison if ranks are equal
+    #[inline(always)]
     fn infer_direction_from_ports(source: u16, dest: u16) -> Option<PacketDirection> {
         if source == dest {
             return None; // Could not determine direction from identical ports.

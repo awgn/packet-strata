@@ -1,4 +1,5 @@
 use ahash::RandomState;
+use hashlink::linked_hash_map::RawEntryMut;
 use hashlink::LinkedHashMap;
 
 pub mod direction;
@@ -38,20 +39,21 @@ where
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn get_or_insert_with<F>(&mut self, key: &K, create: F) -> &mut V
     where
         F: FnOnce() -> V,
     {
-        // Workaround for Rust borrow checker limitation.
-        // Using a raw pointer avoids the double-lookup and avoids cloning the key on hit.
-        // This is safe because the mutable borrow is strictly disjoint across branches.
-        let lru_ptr = &mut self.lru as *mut LinkedHashMap<K, V, RandomState>;
-        if let Some(v) = unsafe { &mut *lru_ptr }.to_back(key) {
-            return v;
+        let hash = self.lru.hasher().hash_one(key);
+        match self.lru.raw_entry_mut().from_key_hashed_nocheck(hash, key) {
+            RawEntryMut::Occupied(mut occupied) => {
+                occupied.to_back();
+                occupied.into_mut()
+            }
+            RawEntryMut::Vacant(vacant) => {
+                vacant.insert_hashed_nocheck(hash, key.clone(), create()).1
+            }
         }
-
-        self.lru.entry(key.clone()).or_insert_with(create)
     }
 
     /// Evict entries based on a predicate function, in lru order

@@ -6,6 +6,7 @@ members = [
 ]
 default-members = [
     "packet-strata-lib",
+    "pcap-reader",
 ]
 
 [workspace.package]
@@ -48,3 +49,10 @@ opt-level = 3
 strip = true
 codegen-units = 1
 lto = true
+
+[profile.release-max]
+inherits       = "release"
+codegen-units  = 1
+lto            = "fat"
+panic          = "abort"
+strip          = true

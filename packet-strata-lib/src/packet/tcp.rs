@@ -146,49 +146,49 @@ impl TcpHeader {
     }
 
     /// Check if FIN flag is set
-    #[inline]
+    #[inline(always)]
     pub fn has_fin(&self) -> bool {
         self.flags() & Self::FLAG_FIN != 0
     }
 
     /// Check if SYN flag is set
-    #[inline]
+    #[inline(always)]
     pub fn has_syn(&self) -> bool {
         self.flags() & Self::FLAG_SYN != 0
     }
 
     /// Check if RST flag is set
-    #[inline]
+    #[inline(always)]
     pub fn has_rst(&self) -> bool {
         self.flags() & Self::FLAG_RST != 0
     }
 
     /// Check if PSH flag is set
-    #[inline]
+    #[inline(always)]
     pub fn has_psh(&self) -> bool {
         self.flags() & Self::FLAG_PSH != 0
     }
 
     /// Check if ACK flag is set
-    #[inline]
+    #[inline(always)]
     pub fn has_ack(&self) -> bool {
         self.flags() & Self::FLAG_ACK != 0
     }
 
     /// Check if URG flag is set
-    #[inline]
+    #[inline(always)]
     pub fn has_urg(&self) -> bool {
         self.flags() & Self::FLAG_URG != 0
     }
 
     /// Check if ECE flag is set
-    #[inline]
+    #[inline(always)]
     pub fn has_ece(&self) -> bool {
         self.flags() & Self::FLAG_ECE != 0
     }
 
     /// Check if CWR flag is set
-    #[inline]
+    #[inline(always)]
     pub fn has_cwr(&self) -> bool {
         self.flags() & Self::FLAG_CWR != 0
     }
@@ -206,7 +206,7 @@ impl TcpHeader {
     }
 
     /// Returns the sequence number
-    #[inline]
+    #[inline(always)]
     pub fn sequence_number(&self) -> u32 {
         self.sequence_number.get()
     }

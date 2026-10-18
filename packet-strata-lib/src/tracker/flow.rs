@@ -42,13 +42,13 @@ pub enum TcpStatus {
 }
 
 impl TcpStatus {
-    #[inline]
+    #[inline(always)]
     #[must_use]
     pub fn is_established(self) -> bool {
         matches!(self, TcpStatus::Established)
     }
 
-    #[inline]
+    #[inline(always)]
     #[must_use]
     pub fn is_close_in_progress(self) -> bool {
         matches!(self, TcpStatus::FinWait)
@@ -90,6 +90,7 @@ pub struct IpState {
 }
 
 impl IpState {
+    #[inline(always)]
     pub fn update(&mut self, pkt: &Packet<'_>, dir: PacketDirection) {
         if let Some(NetworkLayer::Ipv4(h)) = pkt.network() {
             if !h.has_dont_fragment() {
@@ -134,11 +135,23 @@ pub struct TcpState {
 }
 
 impl TcpState {
+    #[inline(always)]
     pub fn update<Meta: PacketMetadata>(
         &mut self,
         pkt: &Packet<'_>,
-        _dir: PacketDirection,
+        dir: PacketDirection,
         meta: &Meta,
+        metrics: &FlowMetrics,
+    ) {
+        self.update_with_ts(pkt, dir, meta.timestamp(), metrics);
+    }
+
+    #[inline(always)]
+    fn update_with_ts(
+        &mut self,
+        pkt: &Packet<'_>,
+        _dir: PacketDirection,
+        ts: Timestamp,
         metrics: &FlowMetrics,
     ) {
         if let Some(TransportLayer::Tcp(hdr)) = pkt.transport() {
@@ -156,16 +169,16 @@ impl TcpState {
                 if hdr.has_syn() {
                     // S|A
                     self.status = TcpStatus::SynReceived;
-                    self.ts_syn_ack = meta.timestamp();
+                    self.ts_syn_ack = ts;
                     self.d_seq = hdr.sequence_number();
                     if self.ts_syn.0 > 0 {
-                        self.rtt_net = meta.timestamp() - self.ts_syn;
+                        self.rtt_net = ts - self.ts_syn;
                     }
                 } else {
                     // A only
                     if matches!(self.status, TcpStatus::SynReceived) {
                         self.status = TcpStatus::Established;
-                        self.ts_ack = meta.timestamp();
+                        self.ts_ack = ts;
                         if self.ts_syn.0 > 0 {
                             self.rtt = self.ts_ack - self.ts_syn;
                         }
@@ -175,17 +188,16 @@ impl TcpState {
                         }
                     } else if matches!(self.status, TcpStatus::FinWait) {
                         self.status = TcpStatus::CloseWait;
-                    } else {
-                        if self.status < TcpStatus::Established {
-                            if metrics.d_pkts > 0 && metrics.u_pkts > 0 {
-                                self.status = TcpStatus::Established;
-                            }
-                        }
+                    } else if self.status < TcpStatus::Established
+                        && metrics.d_pkts > 0
+                        && metrics.u_pkts > 0
+                    {
+                        self.status = TcpStatus::Established;
                     }
                 }
             } else if hdr.has_syn() {
                 self.status = TcpStatus::SynSent;
-                self.ts_syn = meta.timestamp();
+                self.ts_syn = ts;
             }
         }
     }
@@ -220,6 +232,7 @@ pub struct FlowMetrics {
 }
 
 impl FlowMetrics {
+    #[inline(always)]
     pub fn update<Meta: PacketMetadata>(
         &mut self,
         pkt: &Packet<'_>,
@@ -284,6 +297,7 @@ where
     D: Default,
 {
     /// Creates a new `Flow` instance.
+    #[inline(always)]
     pub fn new(timestamp: Timestamp, tuple: T, pkt: &Packet<'_>, dir: PacketDirection) -> Self {
         let upwards = matches!(dir, PacketDirection::Upwards);
         Self {
@@ -313,23 +327,22 @@ where
     }
 
     /// Determines the direction of a packet relative to the flow.
-    #[inline]
+    #[inline(always)]
     pub fn packet_dir(&self, pkt: &Packet<'_>) -> PacketDirection {
         if self.base.id.tuple.is_symmetric() {
             return PacketDirection::infer(pkt);
         }
 
-        let is_upwards_addr = pkt
+        let is_upwards = pkt
             .network()
             .and_then(|net| SourceDestLayer::<T::Addr>::source(net))
-            .is_some_and(|src| src == self.base.id.tuple.source());
+            .is_some_and(|src| src == self.base.id.tuple.source())
+            && pkt
+                .transport()
+                .and_then(|tr| SourceDestLayer::<u16>::source(tr))
+                .is_some_and(|src| src == self.base.id.tuple.source_port());
 
-        let is_upwards_port = pkt
-            .transport()
-            .and_then(|tr| SourceDestLayer::<u16>::source(tr))
-            .is_some_and(|src| src == self.base.id.tuple.source_port());
-
-        if is_upwards_addr && is_upwards_port {
+        if is_upwards {
             PacketDirection::Upwards
         } else {
             PacketDirection::Downwards
@@ -342,16 +355,18 @@ where
     D: Process,
 {
     /// Process a packet and update flow statistics.
+    #[inline(always)]
     pub fn process<Meta: PacketMetadata>(
         &mut self,
         meta: &Meta,
         pkt: &Packet<'_>,
         dir: PacketDirection,
     ) {
-        self.base.timing.last = meta.timestamp();
+        let ts = meta.timestamp();
+        self.base.timing.last = ts;
         self.base.metrics.update(pkt, dir, meta);
         self.base.ip.update(pkt, dir);
-        self.base.tcp.update(pkt, dir, meta, &self.base.metrics);
+        self.base.tcp.update_with_ts(pkt, dir, ts, &self.base.metrics);
         self.data.process(meta, pkt, dir, &mut self.base);
     }
 }
@@ -359,10 +374,12 @@ where
 impl<T, D> Trackable for Flow<T, D> {
     type Timestamp = Timestamp;
 
+    #[inline(always)]
     fn timestamp(&self) -> Timestamp {
         self.base.timing.start
     }
 
+    #[inline(always)]
     fn set_timestamp(&mut self, ts: Self::Timestamp) {
         self.base.timing.last = ts;
     }

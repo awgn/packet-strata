@@ -253,8 +253,8 @@ impl std::fmt::Debug for Header<'_> {
             Header::Teredo(h) => f.debug_tuple("Teredo").field(h).finish(),
             Header::Gtpv1(h) => f.debug_tuple("Gtpv1").field(h).finish(),
             Header::Gtpv2(h) => f.debug_tuple("Gtpv2").field(h).finish(),
-            Header::L2tpv2(h) => f.debug_tuple("L2tpv2").field(h).finish(),
-            Header::L2tpv3(h) => f.debug_tuple("L2tpv3").field(h).finish(),
+            Header::L2tpv2(h) => f.debug_tuple("L2TPv2").field(h).finish(),
+            Header::L2tpv3(h) => f.debug_tuple("L2TPv3").field(h).finish(),
             Header::Nvgre(h) => f.debug_tuple("Nvgre").field(h).finish(),
             Header::Pbb(h) => f.debug_tuple("Pbb").field(h).finish(),
             Header::Stt(h) => f.debug_tuple("Stt").field(h).finish(),
@@ -314,7 +314,7 @@ pub enum LinkLayer<'a> {
 }
 
 impl LinkLayer<'_> {
-    #[inline]
+    #[inline(always)]
     pub fn protocol(&self) -> EtherProto {
         match self {
             LinkLayer::Ethernet(h) => h.protocol(),
@@ -324,7 +324,7 @@ impl LinkLayer<'_> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn source(&self) -> EthAddr {
         match self {
             crate::packet::header::LinkLayer::Ethernet(ether) => *ether.source(),
@@ -332,7 +332,7 @@ impl LinkLayer<'_> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn dest(&self) -> EthAddr {
         match self {
             crate::packet::header::LinkLayer::Ethernet(ether) => *ether.dest(),
@@ -400,7 +400,7 @@ impl SourceDestLayer<EthAddr> for LinkLayer<'_> {
     /// # Returns
     /// * `Some(EthAddr)` - The source MAC address for Ethernet frames
     /// * `None` - No MAC address available for non-Ethernet link layers
-    #[inline]
+    #[inline(always)]
     fn source(&self) -> Option<EthAddr> {
         match self {
             LinkLayer::Ethernet(h) => Some(*h.source()),
@@ -416,7 +416,7 @@ impl SourceDestLayer<EthAddr> for LinkLayer<'_> {
     /// # Returns
     /// * `Some(EthAddr)` - The destination MAC address for Ethernet frames
     /// * `None` - No MAC address available for non-Ethernet link layers
-    #[inline]
+    #[inline(always)]
     fn dest(&self) -> Option<EthAddr> {
         match self {
             LinkLayer::Ethernet(h) => Some(*h.dest()),
@@ -430,7 +430,7 @@ impl SourceDestLayer<Ipv4Addr> for NetworkLayer<'_> {
     ///
     /// Returns the source IPv4 address if this is an IPv4 header,
     /// otherwise returns `None` for IPv6, MPLS, or other network layers.
-    #[inline]
+    #[inline(always)]
     fn source(&self) -> Option<Ipv4Addr> {
         match self {
             NetworkLayer::Ipv4(h) => Some(h.header.src_ip()),
@@ -442,7 +442,7 @@ impl SourceDestLayer<Ipv4Addr> for NetworkLayer<'_> {
     ///
     /// Returns the destination IPv4 address if this is an IPv4 header,
     /// otherwise returns `None` for IPv6, MPLS, or other network layers.
-    #[inline]
+    #[inline(always)]
     fn dest(&self) -> Option<Ipv4Addr> {
         match self {
             NetworkLayer::Ipv4(h) => Some(h.header.dst_ip()),
@@ -456,7 +456,7 @@ impl SourceDestLayer<Ipv6Addr> for NetworkLayer<'_> {
     ///
     /// Returns the source IPv6 address if this is an IPv6 header,
     /// otherwise returns `None` for IPv4, MPLS, or other network layers.
-    #[inline]
+    #[inline(always)]
     fn source(&self) -> Option<Ipv6Addr> {
         match self {
             NetworkLayer::Ipv6(h) => Some(h.header.src_ip()),
@@ -468,7 +468,7 @@ impl SourceDestLayer<Ipv6Addr> for NetworkLayer<'_> {
     ///
     /// Returns the destination IPv6 address if this is an IPv6 header,
     /// otherwise returns `None` for IPv4, MPLS, or other network layers.
-    #[inline]
+    #[inline(always)]
     fn dest(&self) -> Option<Ipv6Addr> {
         match self {
             NetworkLayer::Ipv6(h) => Some(h.header.dst_ip()),
@@ -495,18 +495,12 @@ impl TransportLayer<'_> {
     /// # Returns
     /// A tuple containing (source_port, destination_port). For protocols without
     /// port numbers, both values will be 0.
-    #[inline]
+    #[inline(always)]
     pub fn ports(&self) -> (u16, u16) {
         match self {
-            TransportLayer::Tcp(h) => {
-                (h.source().unwrap_or_default(), h.dest().unwrap_or_default())
-            }
-            TransportLayer::Udp(h) => {
-                (h.source().unwrap_or_default(), h.dest().unwrap_or_default())
-            }
-            TransportLayer::Sctp(h) => {
-                (h.source().unwrap_or_default(), h.dest().unwrap_or_default())
-            }
+            TransportLayer::Tcp(h) => (h.header.src_port(), h.header.dst_port()),
+            TransportLayer::Udp(h) => (h.src_port(), h.dst_port()),
+            TransportLayer::Sctp(h) => (h.src_port(), h.dst_port()),
             TransportLayer::Icmp(_) => (0, 0),
             TransportLayer::Icmp6(_) => (0, 0),
         }
@@ -518,7 +512,7 @@ impl SourceDestLayer<u16> for TcpHeaderOpt<'_> {
     ///
     /// TCP headers always contain both source and destination ports,
     /// so this method always returns `Some(port)`.
-    #[inline]
+    #[inline(always)]
     fn source(&self) -> Option<u16> {
         Some(self.header.src_port())
     }
@@ -527,7 +521,7 @@ impl SourceDestLayer<u16> for TcpHeaderOpt<'_> {
     ///
     /// TCP headers always contain both source and destination ports,
     /// so this method always returns `Some(port)`.
-    #[inline]
+    #[inline(always)]
     fn dest(&self) -> Option<u16> {
         Some(self.header.dst_port())
     }
@@ -538,7 +532,7 @@ impl SourceDestLayer<u16> for UdpHeader {
     ///
     /// UDP headers always contain both source and destination ports,
     /// so this method always returns `Some(port)`.
-    #[inline]
+    #[inline(always)]
     fn source(&self) -> Option<u16> {
         Some(self.src_port())
     }
@@ -547,7 +541,7 @@ impl SourceDestLayer<u16> for UdpHeader {
     ///
     /// UDP headers always contain both source and destination ports,
     /// so this method always returns `Some(port)`.
-    #[inline]
+    #[inline(always)]
     fn dest(&self) -> Option<u16> {
         Some(self.dst_port())
     }
@@ -558,7 +552,7 @@ impl SourceDestLayer<u16> for SctpHeader {
     ///
     /// SCTP headers always contain both source and destination ports,
     /// so this method always returns `Some(port)`.
-    #[inline]
+    #[inline(always)]
     fn source(&self) -> Option<u16> {
         Some(self.src_port())
     }
@@ -567,7 +561,7 @@ impl SourceDestLayer<u16> for SctpHeader {
     ///
     /// SCTP headers always contain both source and destination ports,
     /// so this method always returns `Some(port)`.
-    #[inline]
+    #[inline(always)]
     fn dest(&self) -> Option<u16> {
         Some(self.dst_port())
     }
@@ -578,7 +572,7 @@ impl SourceDestLayer<u16> for TransportLayer<'_> {
     ///
     /// Returns the source port for TCP, UDP, and SCTP headers.
     /// Returns `None` for ICMP and ICMPv6 headers, which don't have port numbers.
-    #[inline]
+    #[inline(always)]
     fn source(&self) -> Option<u16> {
         match self {
             TransportLayer::Tcp(h) => Some(h.src_port()),
@@ -593,7 +587,7 @@ impl SourceDestLayer<u16> for TransportLayer<'_> {
     ///
     /// Returns the destination port for TCP, UDP, and SCTP headers.
     /// Returns `None` for ICMP and ICMPv6 headers, which don't have port numbers.
-    #[inline]
+    #[inline(always)]
     fn dest(&self) -> Option<u16> {
         match self {
             TransportLayer::Tcp(h) => Some(h.dst_port()),
