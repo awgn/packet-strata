@@ -66,7 +66,7 @@ fn main() {
         std::process::exit(1);
     }
     if args.stats {
-        println!("{stats}");
+        println!("\n{stats}");
     }
 
     if args.flow_tracker {
@@ -115,8 +115,10 @@ fn process_pcap(
     let start = std::time::Instant::now();
     let link_type = &mut None;
 
+    const PCAP_BUFFER_SIZE: usize = 4 * 1024 * 1024;
+
     // Try to create a PCAPNG reader first
-    match PcapNGReader::new(65536, file) {
+    match PcapNGReader::new(PCAP_BUFFER_SIZE, file) {
         Ok(mut reader) => {
             info!("Detected PCAPNG format");
             loop {
@@ -175,7 +177,7 @@ fn process_pcap(
             let file = File::open(pcap_path).unwrap();
 
             // Try legacy PCAP format
-            let mut reader = LegacyPcapReader::new(65536, file)
+            let mut reader = LegacyPcapReader::new(PCAP_BUFFER_SIZE, file)
                 .map_err(|e| format!("Failed to create PCAP reader: {:?}", e))?;
 
             loop {

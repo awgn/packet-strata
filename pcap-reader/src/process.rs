@@ -15,7 +15,7 @@ use packet_strata::metadata::PacketMetadata;
 ///
 /// This function iterates through all headers in the packet and
 /// updates the appropriate counters.
-#[inline]
+#[inline(always)]
 pub fn process_packet<'a, Pkt: PacketMetadata>(
     _pkt_count: u64,
     link_type: &mut Option<LinkType>,
@@ -48,104 +48,134 @@ pub fn process_packet<'a, Pkt: PacketMetadata>(
     }
 }
 
+#[inline(always)]
+fn record_header_stats(header: Header<'_>, local_stats: &mut LocalStats) {
+    match header {
+        // Link layer
+        Header::Ethernet(_) => local_stats.ethernet += 1,
+        Header::Sll(_) => local_stats.sll += 1,
+        Header::Sllv2(_) => local_stats.sllv2 += 1,
+        Header::Null(_) => local_stats.null += 1,
+
+        // Network layer
+        Header::Ipv4(_) => local_stats.ipv4 += 1,
+        Header::Ipv6(_) => local_stats.ipv6 += 1,
+        Header::Arp(_) => local_stats.arp += 1,
+
+        // Transport layer
+        Header::Tcp(_) => local_stats.tcp += 1,
+        Header::Udp(_) => local_stats.udp += 1,
+        Header::Sctp(_) => local_stats.sctp += 1,
+        Header::Icmp(_) => local_stats.icmp += 1,
+        Header::Icmp6(_) => local_stats.icmpv6 += 1,
+
+        // Tunnel protocols
+        Header::Vxlan(_) => local_stats.vxlan += 1,
+        Header::Geneve(_) => local_stats.geneve += 1,
+        Header::Gre(_) => local_stats.gre += 1,
+        Header::Nvgre(_) => local_stats.nvgre += 1,
+        Header::Mpls(_) => local_stats.mpls += 1,
+        Header::Teredo(_) => local_stats.teredo += 1,
+        Header::Gtpv1(_) => local_stats.gtpv1 += 1,
+        Header::Gtpv2(_) => local_stats.gtpv2 += 1,
+        Header::L2tpv2(_) => local_stats.l2tpv2 += 1,
+        Header::L2tpv3(_) => local_stats.l2tpv3 += 1,
+        Header::Pbb(_) => local_stats.pbb += 1,
+        Header::Stt(_) => local_stats.stt += 1,
+        Header::Pptp(_) => local_stats.pptp += 1,
+        Header::Ipip(tunnel) => match tunnel.tunnel_type() {
+            IpipType::Ipip => local_stats.ipip += 1,
+            IpipType::Sit => local_stats.sit += 1,
+            IpipType::Ip4in6 => local_stats.ip4in6 += 1,
+            IpipType::Ip6Tnl => local_stats.ip6tnl += 1,
+        },
+
+        // Unknown protocols
+        Header::Unknown { proto, .. } => {
+            use packet_strata::packet::iter::UnknownProto;
+            match proto {
+                UnknownProto::Ether(_) => local_stats.unknown_ether_proto += 1,
+                UnknownProto::Ip(_) => local_stats.unknown_ip_proto += 1,
+                UnknownProto::Tunnel(_) => local_stats.unknown_other += 1,
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn record_error_stats(e: packet_strata::packet::PacketHeaderError, local_stats: &mut LocalStats) {
+    use packet_strata::packet::PacketHeaderError;
+    match e {
+        PacketHeaderError::TooShort(_) => local_stats.too_small += 1,
+        PacketHeaderError::Invalid(_) => local_stats.invalid += 1,
+        PacketHeaderError::InsufficientLength(_) => local_stats.insufficient_len += 1,
+        PacketHeaderError::Other(_) => local_stats.other_errors += 1,
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn process_iterate_headers_dump<'a, Pkt: PacketMetadata>(
+    pkt: &'a Pkt,
+    iter: PacketIter<'a>,
+    local_stats: &mut LocalStats,
+) {
+    println!(
+        "{:>5}   {} ({} bytes)",
+        local_stats.total_packets,
+        pkt.timestamp(),
+        pkt.data().len()
+    );
+    for result in iter {
+        match result {
+            Ok(header) => {
+                println!("        {header}");
+                record_header_stats(header, local_stats);
+            }
+            Err(e) => {
+                record_error_stats(e, local_stats);
+                break;
+            }
+        }
+    }
+}
+
+#[inline(always)]
 pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
     _pkt_count: u64,
     link_type: &mut Option<LinkType>,
     pkt: &'a Pkt,
     local_stats: &mut LocalStats,
     stats: &Stats,
-    flow_tracker: &mut FlowTracker,
+    _flow_tracker: &mut FlowTracker,
     args: &Args,
 ) {
     local_stats.total_packets += 1;
     local_stats.total_bytes += pkt.caplen() as u64;
 
-    if link_type.is_none() {
-        *link_type = Some(PacketIter::guess_link_type(pkt.data()));
-    }
+    let lt = match *link_type {
+        Some(lt) => lt,
+        None => {
+            let guessed = PacketIter::guess_link_type(pkt.data());
+            *link_type = Some(guessed);
+            guessed
+        }
+    };
 
-    let iter = PacketIter::new(pkt.data(), link_type.unwrap());
+    let iter = PacketIter::new(pkt.data(), lt);
 
-    if args.dump_packet {
-        println!(
-            "{:>5}   {} ({} bytes)",
-            local_stats.total_packets,
-            pkt.timestamp(),
-            pkt.data().len()
-        );
-    }
-
-    for result in iter {
-        match result {
-            Ok(header) => {
-                if args.dump_packet {
-                    println!("        {header}");
+    if !args.dump_packet {
+        for result in iter {
+            match result {
+                Ok(header) => record_header_stats(header, local_stats),
+                Err(e) => {
+                    record_error_stats(e, local_stats);
+                    break;
                 }
-                match header {
-                    // Link layer
-                    Header::Ethernet(_) => local_stats.ethernet += 1,
-                    Header::Sll(_) => local_stats.sll += 1,
-                    Header::Sllv2(_) => local_stats.sllv2 += 1,
-                    Header::Null(_) => local_stats.null += 1,
-
-                    // Network layer
-                    Header::Ipv4(_) => local_stats.ipv4 += 1,
-                    Header::Ipv6(_) => local_stats.ipv6 += 1,
-                    Header::Arp(_) => local_stats.arp += 1,
-
-                    // Transport layer
-                    Header::Tcp(_) => local_stats.tcp += 1,
-                    Header::Udp(_) => local_stats.udp += 1,
-                    Header::Sctp(_) => local_stats.sctp += 1,
-                    Header::Icmp(_) => local_stats.icmp += 1,
-                    Header::Icmp6(_) => local_stats.icmpv6 += 1,
-
-                    // Tunnel protocols
-                    Header::Vxlan(_) => local_stats.vxlan += 1,
-                    Header::Geneve(_) => local_stats.geneve += 1,
-                    Header::Gre(_) => local_stats.gre += 1,
-                    Header::Nvgre(_) => local_stats.nvgre += 1,
-                    Header::Mpls(_) => local_stats.mpls += 1,
-                    Header::Teredo(_) => local_stats.teredo += 1,
-                    Header::Gtpv1(_) => local_stats.gtpv1 += 1,
-                    Header::Gtpv2(_) => local_stats.gtpv2 += 1,
-                    Header::L2tpv2(_) => local_stats.l2tpv2 += 1,
-                    Header::L2tpv3(_) => local_stats.l2tpv3 += 1,
-                    Header::Pbb(_) => local_stats.pbb += 1,
-                    Header::Stt(_) => local_stats.stt += 1,
-                    Header::Pptp(_) => local_stats.pptp += 1,
-                    Header::Ipip(tunnel) => {
-                        use packet_strata::packet::tunnel::ipip::IpipType;
-                        match tunnel.tunnel_type() {
-                            IpipType::Ipip => local_stats.ipip += 1,
-                            IpipType::Sit => local_stats.sit += 1,
-                            IpipType::Ip4in6 => local_stats.ip4in6 += 1,
-                            IpipType::Ip6Tnl => local_stats.ip6tnl += 1,
-                        }
-                    }
-
-                    // Unknown protocols
-                    Header::Unknown { proto, .. } => {
-                        use packet_strata::packet::iter::UnknownProto;
-                        match proto {
-                            UnknownProto::Ether(_) => local_stats.unknown_ether_proto += 1,
-                            UnknownProto::Ip(_) => local_stats.unknown_ip_proto += 1,
-                            UnknownProto::Tunnel(_) => local_stats.unknown_other += 1,
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                use packet_strata::packet::PacketHeaderError;
-                match e {
-                    PacketHeaderError::TooShort(_) => local_stats.too_small += 1,
-                    PacketHeaderError::Invalid(_) => local_stats.invalid += 1,
-                    PacketHeaderError::InsufficientLength(_) => local_stats.insufficient_len += 1,
-                    PacketHeaderError::Other(_) => local_stats.other_errors += 1,
-                }
-                break;
             }
         }
+    } else {
+        process_iterate_headers_dump(pkt, iter, local_stats);
     }
 
     // Periodic flush to shared stats

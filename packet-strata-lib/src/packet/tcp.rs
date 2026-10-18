@@ -134,15 +134,15 @@ impl TcpHeader {
     const NAME: &'static str = "TcpHeader";
 
     /// Returns the data offset (header length) in 32-bit words
-    #[inline]
+    #[inline(always)]
     pub fn data_offset(&self) -> u8 {
-        (self.data_offset_flags.get() >> 12) as u8
+        self.data_offset_flags.as_bytes()[0] >> 4
     }
 
     /// Returns the TCP flags byte
-    #[inline]
+    #[inline(always)]
     pub fn flags(&self) -> u8 {
-        (self.data_offset_flags.get() & 0x00FF) as u8
+        self.data_offset_flags.as_bytes()[1]
     }
 
     /// Check if FIN flag is set
@@ -194,13 +194,13 @@ impl TcpHeader {
     }
 
     /// Returns the source port number
-    #[inline]
+    #[inline(always)]
     pub fn src_port(&self) -> u16 {
         self.src_port.get()
     }
 
     /// Returns the destination port number
-    #[inline]
+    #[inline(always)]
     pub fn dst_port(&self) -> u16 {
         self.dst_port.get()
     }
@@ -212,12 +212,10 @@ impl TcpHeader {
     }
 
     /// Validates the TCP header
-    #[inline]
+    #[inline(always)]
     fn is_valid(&self) -> bool {
-        // Data offset must be at least 5 (20 bytes minimum)
-        // and at most 15 (60 bytes maximum)
-        let offset = self.data_offset();
-        (5..=15).contains(&offset)
+        // Data offset (upper 4 bits of byte 0) must be at least 5 (20 bytes minimum)
+        self.data_offset_flags.as_bytes()[0] >= 0x50
     }
 
     /// Returns the acknowledgment number
@@ -285,7 +283,7 @@ impl<'a> TcpHeaderOpt<'a> {
 impl Deref for TcpHeaderOpt<'_> {
     type Target = TcpHeader;
 
-    #[inline]
+    #[inline(always)]
     fn deref(&self) -> &Self::Target {
         self.header
     }
@@ -295,17 +293,17 @@ impl PacketHeader for TcpHeader {
     const NAME: &'static str = "TcpHeader";
     type InnerType = ();
 
-    #[inline]
+    #[inline(always)]
     fn inner_type(&self) -> Self::InnerType {}
 
     /// Returns the header length in bytes
-    #[inline]
+    #[inline(always)]
     fn total_len(&self, _buf: &[u8]) -> usize {
         (self.data_offset() as usize) * 4
     }
 
     /// Validates the TCP header
-    #[inline]
+    #[inline(always)]
     fn is_valid(&self) -> bool {
         self.is_valid()
     }
@@ -314,12 +312,40 @@ impl PacketHeader for TcpHeader {
 impl HeaderParser for TcpHeader {
     type Output<'a> = TcpHeaderOpt<'a>;
 
-    #[inline]
+    #[inline(always)]
     fn into_view<'a>(header: &'a Self, raw_options: &'a [u8]) -> Self::Output<'a> {
         TcpHeaderOpt {
             header,
             raw_options,
         }
+    }
+
+    #[inline(always)]
+    fn from_bytes<'a>(
+        buf: &'a [u8],
+    ) -> Result<(Self::Output<'a>, &'a [u8]), super::PacketHeaderError> {
+        let (header_ref, rest_buf) = zerocopy::Ref::<_, Self>::from_prefix(buf)
+            .map_err(|_| super::PacketHeaderError::TooShort(Self::NAME))?;
+        let header = zerocopy::Ref::into_ref(header_ref);
+
+        let doff_byte = header.data_offset_flags.as_bytes()[0];
+        if doff_byte < 0x50 {
+            return Err(super::PacketHeaderError::Invalid(Self::NAME));
+        }
+
+        let options_len = ((doff_byte >> 4) as usize) * 4 - Self::FIXED_LEN;
+        if rest_buf.len() < options_len {
+            return Err(super::PacketHeaderError::TooShort(Self::NAME));
+        }
+
+        let (raw_options, payload) = rest_buf.split_at(options_len);
+        Ok((
+            TcpHeaderOpt {
+                header,
+                raw_options,
+            },
+            payload,
+        ))
     }
 }
 

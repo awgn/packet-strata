@@ -176,16 +176,43 @@ pub struct EtherHeader {
 }
 
 impl EtherHeader {
+    #[inline(always)]
     pub fn dest(&self) -> &EthAddr {
         &self.dest
     }
 
+    #[inline(always)]
     pub fn source(&self) -> &EthAddr {
         &self.source
     }
 
+    #[inline(always)]
     pub fn protocol(&self) -> EtherProto {
         self.proto
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn parse_vlan<'a>(
+        eth_header: &'a EtherHeader,
+        rest: &'a [u8],
+    ) -> Result<(EtherHeaderVlan<'a>, &'a [u8]), super::PacketHeaderError> {
+        let (vlan1, rest) = Ether8021qHeader::from_bytes(rest)?;
+        if vlan1.proto != EtherProto::VLAN_8021Q {
+            return Ok((EtherHeaderVlan::VLAN8021Q(eth_header, vlan1), rest));
+        }
+
+        let (vlan2, rest) = Ether8021qHeader::from_bytes(rest)?;
+        if vlan2.proto == EtherProto::VLAN_8021Q {
+            return Err(super::PacketHeaderError::Other(
+                "More than two nested VLAN tags are not supported",
+            ));
+        }
+
+        Ok((
+            EtherHeaderVlan::VLAN8021QNested(eth_header, vlan1, vlan2),
+            rest,
+        ))
     }
 }
 
@@ -197,7 +224,7 @@ impl PacketHeader for EtherHeaderFixed {
     const NAME: &'static str = "EtherHeaderFixed";
     type InnerType = EtherProto;
 
-    #[inline]
+    #[inline(always)]
     fn inner_type(&self) -> Self::InnerType {
         self.0.proto
     }
@@ -206,7 +233,7 @@ impl PacketHeader for EtherHeaderFixed {
 impl HeaderParser for EtherHeaderFixed {
     type Output<'a> = &'a EtherHeader;
 
-    #[inline]
+    #[inline(always)]
     fn into_view<'a>(header: &'a Self, _options: &'a [u8]) -> Self::Output<'a> {
         &header.0
     }
@@ -216,7 +243,7 @@ impl PacketHeader for EtherHeader {
     const NAME: &'static str = "EtherHeader";
     type InnerType = EtherProto;
 
-    #[inline]
+    #[inline(always)]
     fn inner_type(&self) -> Self::InnerType {
         self.proto
     }
@@ -230,32 +257,19 @@ impl HeaderParser for EtherHeader {
         unreachable!()
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_bytes<'a>(
         buf: &'a [u8],
     ) -> Result<(Self::Output<'a>, &'a [u8]), super::PacketHeaderError> {
-        let (eth_header, mut rest) = EtherHeaderFixed::from_bytes(buf)?;
+        let (eth_ref, rest) = zerocopy::Ref::<_, EtherHeader>::from_prefix(buf)
+            .map_err(|_| super::PacketHeaderError::TooShort(EtherHeaderFixed::NAME))?;
+        let eth_header = zerocopy::Ref::into_ref(eth_ref);
 
-        let mut ethernet_header = EtherHeaderVlan::Standard(eth_header);
-
-        while ethernet_header.inner_type() == EtherProto::VLAN_8021Q {
-            let (vlan_header, vlan_rest) = Ether8021qHeader::from_bytes(rest)?;
-            rest = vlan_rest;
-
-            ethernet_header = match &ethernet_header {
-                EtherHeaderVlan::Standard(eth) => EtherHeaderVlan::VLAN8021Q(eth, vlan_header),
-                EtherHeaderVlan::VLAN8021Q(eth, vlan) => {
-                    EtherHeaderVlan::VLAN8021QNested(eth, vlan, vlan_header)
-                }
-                EtherHeaderVlan::VLAN8021QNested(_, _, _) => {
-                    return Err(super::PacketHeaderError::Other(
-                        "More than two nested VLAN tags are not supported",
-                    ));
-                }
-            };
+        if eth_header.proto != EtherProto::VLAN_8021Q {
+            return Ok((EtherHeaderVlan::Standard(eth_header), rest));
         }
 
-        Ok((ethernet_header, rest))
+        Self::parse_vlan(eth_header, rest)
     }
 }
 
@@ -267,14 +281,17 @@ pub struct Ether8021qHeader {
 }
 
 impl Ether8021qHeader {
+    #[inline]
     pub fn vlan_id(&self) -> u16 {
         self.tci.get() & 0x0FFF
     }
 
+    #[inline]
     pub fn vlan_pcp(&self) -> u8 {
         ((self.tci.get() >> 13) & 0x07) as u8
     }
 
+    #[inline]
     pub fn vlan_dei(&self) -> bool {
         ((self.tci.get() >> 12) & 0x01) != 0
     }
@@ -297,7 +314,7 @@ impl PacketHeader for Ether8021qHeader {
     const NAME: &'static str = "Ether8021qHeader";
     type InnerType = EtherProto;
 
-    #[inline]
+    #[inline(always)]
     fn inner_type(&self) -> Self::InnerType {
         self.proto
     }
@@ -306,7 +323,7 @@ impl PacketHeader for Ether8021qHeader {
 impl HeaderParser for Ether8021qHeader {
     type Output<'a> = &'a Ether8021qHeader;
 
-    #[inline]
+    #[inline(always)]
     fn into_view<'a>(header: &'a Self, _options: &'a [u8]) -> Self::Output<'a> {
         header
     }
@@ -350,6 +367,7 @@ impl Display for EtherHeaderVlan<'_> {
 impl Deref for EtherHeaderVlan<'_> {
     type Target = EtherHeader;
 
+    #[inline(always)]
     fn deref(&self) -> &Self::Target {
         match self {
             EtherHeaderVlan::Standard(eth) => eth,
@@ -360,6 +378,7 @@ impl Deref for EtherHeaderVlan<'_> {
 }
 
 impl<'a> EtherHeaderVlan<'a> {
+    #[inline(always)]
     pub fn dest(&self) -> &EthAddr {
         match self {
             EtherHeaderVlan::Standard(eth) => &eth.dest,
@@ -368,6 +387,7 @@ impl<'a> EtherHeaderVlan<'a> {
         }
     }
 
+    #[inline(always)]
     pub fn source(&self) -> &EthAddr {
         match self {
             EtherHeaderVlan::Standard(eth) => &eth.source,
@@ -376,6 +396,7 @@ impl<'a> EtherHeaderVlan<'a> {
         }
     }
 
+    #[inline(always)]
     pub fn inner_type(&self) -> EtherProto {
         match self {
             EtherHeaderVlan::Standard(eth) => eth.proto,
@@ -389,7 +410,7 @@ impl PacketHeader for EtherHeaderVlan<'_> {
     const NAME: &'static str = "EtherHeaderVlan";
     type InnerType = EtherProto;
 
-    #[inline]
+    #[inline(always)]
     fn inner_type(&self) -> Self::InnerType {
         self.inner_type()
     }

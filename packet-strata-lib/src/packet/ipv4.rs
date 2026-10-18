@@ -210,7 +210,7 @@ impl Ipv4Header {
         self.ttl
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn protocol(&self) -> IpProto {
         self.protocol
     }
@@ -265,7 +265,7 @@ impl<'a> Ipv4HeaderOpt<'a> {
 impl Deref for Ipv4HeaderOpt<'_> {
     type Target = Ipv4Header;
 
-    #[inline]
+    #[inline(always)]
     fn deref(&self) -> &Self::Target {
         self.header
     }
@@ -275,31 +275,69 @@ impl PacketHeader for Ipv4Header {
     const NAME: &'static str = "IPv4Header";
     type InnerType = IpProto;
 
-    #[inline]
+    #[inline(always)]
     fn inner_type(&self) -> Self::InnerType {
         self.protocol
     }
 
-    #[inline]
+    #[inline(always)]
     fn total_len(&self, _buf: &[u8]) -> usize {
         (self.ihl() as usize) * 4
     }
 
-    #[inline]
+    #[inline(always)]
     fn is_valid(&self) -> bool {
-        self.version() == 4 && self.ihl() >= 5
+        self.ver_ihl >= 0x45 && self.ver_ihl <= 0x4F
     }
 }
 
 impl HeaderParser for Ipv4Header {
     type Output<'a> = Ipv4HeaderOpt<'a>;
 
-    #[inline]
+    #[inline(always)]
     fn into_view<'a>(header: &'a Self, raw_options: &'a [u8]) -> Self::Output<'a> {
         Ipv4HeaderOpt {
             header,
             raw_options,
         }
+    }
+
+    #[inline(always)]
+    fn from_bytes<'a>(
+        buf: &'a [u8],
+    ) -> Result<(Self::Output<'a>, &'a [u8]), super::PacketHeaderError> {
+        let (header_ref, rest_buf) = zerocopy::Ref::<_, Self>::from_prefix(buf)
+            .map_err(|_| super::PacketHeaderError::TooShort(Self::NAME))?;
+        let header = zerocopy::Ref::into_ref(header_ref);
+
+        // Fast path: standard 20-byte IPv4 header without options (version=4, IHL=5)
+        if header.ver_ihl == 0x45 {
+            return Ok((
+                Ipv4HeaderOpt {
+                    header,
+                    raw_options: &[],
+                },
+                rest_buf,
+            ));
+        }
+
+        if header.ver_ihl < 0x45 || header.ver_ihl > 0x4F {
+            return Err(super::PacketHeaderError::Invalid(Self::NAME));
+        }
+
+        let options_len = ((header.ver_ihl & 0x0F) as usize) * 4 - Self::FIXED_LEN;
+        if rest_buf.len() < options_len {
+            return Err(super::PacketHeaderError::TooShort(Self::NAME));
+        }
+
+        let (raw_options, payload) = rest_buf.split_at(options_len);
+        Ok((
+            Ipv4HeaderOpt {
+                header,
+                raw_options,
+            },
+            payload,
+        ))
     }
 }
 
@@ -348,6 +386,7 @@ impl fmt::Display for Ipv4HeaderOpt<'_> {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

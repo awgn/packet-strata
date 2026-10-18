@@ -166,12 +166,10 @@ pub enum LinkType {
 pub struct PacketIter<'a> {
     /// Remaining unparsed buffer
     remaining: &'a [u8],
-    /// Next layer to parse
+    /// Next layer to parse (also encodes Done/fused state)
     next_layer: NextLayer,
-    /// Whether the iterator is done (fused)
-    done: bool,
-    /// Track the last UDP header for tunnel detection
-    last_udp_ports: Option<(u16, u16)>,
+    /// Track the last UDP header ports (src_port, dst_port) for tunnel detection
+    last_udp_ports: (u16, u16),
 }
 
 impl<'a> PacketIter<'a> {
@@ -190,12 +188,17 @@ impl<'a> PacketIter<'a> {
     /// let packet = vec![/* ... */];
     /// let iter = PacketIter::new(&packet, LinkType::Ethernet);
     /// ```
+    #[inline(always)]
     pub fn new(buf: &'a [u8], link_type: LinkType) -> Self {
+        let next_layer = match link_type {
+            LinkType::RawIpv4 => NextLayer::Network(EtherProto::IPV4),
+            LinkType::RawIpv6 => NextLayer::Network(EtherProto::IPV6),
+            _ => NextLayer::Link(link_type),
+        };
         Self {
             remaining: buf,
-            next_layer: NextLayer::Link(link_type),
-            done: false,
-            last_udp_ports: None,
+            next_layer,
+            last_udp_ports: (0, 0),
         }
     }
 
@@ -309,12 +312,12 @@ impl<'a> PacketIter<'a> {
     ///
     /// * `buf` - The packet buffer to parse (starting at network layer)
     /// * `ether_proto` - The EtherType indicating the network protocol
+    #[inline(always)]
     pub fn from_network_layer(buf: &'a [u8], ether_proto: EtherProto) -> Self {
         Self {
             remaining: buf,
             next_layer: NextLayer::Network(ether_proto),
-            done: false,
-            last_udp_ports: None,
+            last_udp_ports: (0, 0),
         }
     }
 
@@ -327,42 +330,51 @@ impl<'a> PacketIter<'a> {
     ///
     /// * `buf` - The packet buffer to parse (starting at transport layer)
     /// * `ip_proto` - The IP protocol number
+    #[inline(always)]
     pub fn from_transport_layer(buf: &'a [u8], ip_proto: IpProto) -> Self {
         Self {
             remaining: buf,
             next_layer: NextLayer::Transport(ip_proto),
-            done: false,
-            last_udp_ports: None,
+            last_udp_ports: (0, 0),
         }
     }
 
     /// Returns the remaining unparsed bytes
     ///
     /// This is the payload after all parsed headers.
+    #[inline(always)]
     pub fn remaining(&self) -> &'a [u8] {
         self.remaining
     }
 
     /// Returns true if the iterator is done
+    #[inline(always)]
     pub fn is_done(&self) -> bool {
-        self.done
+        matches!(self.next_layer, NextLayer::Done) || self.remaining.is_empty()
+    }
+
+    /// Parse Ethernet header
+    #[inline(always)]
+    fn parse_ethernet(&mut self) -> Option<Result<Header<'a>, PacketHeaderError>> {
+        match EtherHeader::from_bytes(self.remaining) {
+            Ok((eth, rest)) => {
+                let next_proto = eth.inner_type();
+                self.remaining = rest;
+                self.next_layer = NextLayer::Network(next_proto);
+                Some(Ok(Header::Ethernet(eth)))
+            }
+            Err(e) => {
+                self.next_layer = NextLayer::Done;
+                Some(Err(e))
+            }
+        }
     }
 
     /// Parse link layer header
+    #[inline(always)]
     fn parse_link(&mut self, link_type: LinkType) -> Option<Result<Header<'a>, PacketHeaderError>> {
         match link_type {
-            LinkType::Ethernet => match EtherHeader::from_bytes(self.remaining) {
-                Ok((eth, rest)) => {
-                    let next_proto = eth.inner_type();
-                    self.remaining = rest;
-                    self.next_layer = NextLayer::Network(next_proto);
-                    Some(Ok(Header::Ethernet(eth)))
-                }
-                Err(e) => {
-                    self.done = true;
-                    Some(Err(e))
-                }
-            },
+            LinkType::Ethernet => self.parse_ethernet(),
             LinkType::Sll => match SllHeader::from_bytes(self.remaining) {
                 Ok((sll, rest)) => {
                     let next_proto = sll.protocol();
@@ -371,7 +383,7 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Sll(sll)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
@@ -383,7 +395,7 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Sllv2(sll)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
@@ -395,28 +407,23 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Null(null)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
-            LinkType::RawIpv4 => {
-                self.next_layer = NextLayer::Network(EtherProto::IPV4);
-                self.next()
-            }
-            LinkType::RawIpv6 => {
-                self.next_layer = NextLayer::Network(EtherProto::IPV6);
-                self.next()
-            }
+            LinkType::RawIpv4 => self.parse_network(EtherProto::IPV4),
+            LinkType::RawIpv6 => self.parse_network(EtherProto::IPV6),
         }
     }
 
     /// Parse network layer header
+    #[inline(always)]
     fn parse_network(
         &mut self,
         ether_proto: EtherProto,
     ) -> Option<Result<Header<'a>, PacketHeaderError>> {
-        match ether_proto {
-            EtherProto::IPV4 => match Ipv4Header::from_bytes(self.remaining) {
+        if ether_proto == EtherProto::IPV4 {
+            return match Ipv4Header::from_bytes(self.remaining) {
                 Ok((ipv4, rest)) => {
                     let proto = ipv4.protocol();
                     self.remaining = rest;
@@ -435,10 +442,13 @@ impl<'a> PacketIter<'a> {
                     }
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
-            },
+            };
+        }
+
+        match ether_proto {
             EtherProto::IPV6 => match Ipv6Header::from_bytes(self.remaining) {
                 Ok((ipv6, rest)) => {
                     // For IPv6, find the upper layer protocol
@@ -464,7 +474,7 @@ impl<'a> PacketIter<'a> {
                     }
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
@@ -475,25 +485,22 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Arp(arp)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
             EtherProto::MPLS_UC | EtherProto::MPLS_MC => {
                 // MPLS encapsulation
-                self.next_layer = NextLayer::Tunnel(TunnelType::Mpls);
-                self.next()
+                self.parse_tunnel(TunnelType::Mpls)
             }
             EtherProto::TEB => {
                 // Transparent Ethernet Bridging - inner Ethernet frame
-                self.next_layer = NextLayer::Link(LinkType::Ethernet);
-                self.next()
+                self.parse_ethernet()
             }
             EtherProto::VLAN_8021AH | EtherProto::VLAN_8021AD => {
                 // PBB (Provider Backbone Bridge / MAC-in-MAC)
                 // 0x88E7 = I-Tag (802.1ah), 0x88A8 = B-Tag (802.1ad)
-                self.next_layer = NextLayer::Tunnel(TunnelType::Pbb);
-                self.next()
+                self.parse_tunnel(TunnelType::Pbb)
             }
             _ => {
                 // Unknown network protocol
@@ -502,19 +509,20 @@ impl<'a> PacketIter<'a> {
                     data: self.remaining,
                 };
                 self.remaining = &[];
-                self.done = true;
+                self.next_layer = NextLayer::Done;
                 Some(Ok(header))
             }
         }
     }
 
     /// Parse transport layer header
+    #[inline(always)]
     fn parse_transport(
         &mut self,
         ip_proto: IpProto,
     ) -> Option<Result<Header<'a>, PacketHeaderError>> {
-        match ip_proto {
-            IpProto::TCP => match TcpHeader::from_bytes(self.remaining) {
+        if ip_proto == IpProto::TCP {
+            return match TcpHeader::from_bytes(self.remaining) {
                 Ok((tcp, rest)) => {
                     let src_port = tcp.src_port();
                     let dst_port = tcp.dst_port();
@@ -530,15 +538,18 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Tcp(tcp)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
-            },
-            IpProto::UDP => match UdpHeader::from_bytes(self.remaining) {
+            };
+        }
+
+        if ip_proto == IpProto::UDP {
+            return match UdpHeader::from_bytes(self.remaining) {
                 Ok((udp, rest)) => {
                     let src_port = udp.src_port();
                     let dst_port = udp.dst_port();
-                    self.last_udp_ports = Some((src_port, dst_port));
+                    self.last_udp_ports = (src_port, dst_port);
 
                     // Check for tunnel protocols based on UDP ports
                     if let Some(tunnel_type) = detect_udp_tunnel(src_port, dst_port, rest) {
@@ -551,21 +562,27 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Udp(udp)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
-            },
-            IpProto::SCTP => match SctpHeader::from_bytes(self.remaining) {
+            };
+        }
+
+        if ip_proto == IpProto::SCTP {
+            return match SctpHeader::from_bytes(self.remaining) {
                 Ok((sctp, rest)) => {
                     self.remaining = rest;
                     self.next_layer = NextLayer::Done;
                     Some(Ok(Header::Sctp(sctp)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
-            },
+            };
+        }
+
+        match ip_proto {
             IpProto::ICMP => match IcmpHeader::from_bytes(self.remaining) {
                 Ok((icmp, rest)) => {
                     self.remaining = rest;
@@ -573,7 +590,7 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Icmp(icmp)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
@@ -584,26 +601,22 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Icmp6(icmp6)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
             IpProto::GRE => {
                 // GRE tunnel - detect specific variant (PPTP, NVGRE, or standard GRE)
                 let tunnel_type = detect_gre_variant(self.remaining);
-                self.next_layer = NextLayer::Tunnel(tunnel_type);
-                self.next()
+                self.parse_tunnel(tunnel_type)
             }
             IpProto::L2TP => {
                 // L2TPv3 over IP (protocol 115)
-                self.next_layer = NextLayer::Tunnel(TunnelType::L2tpv3);
-                self.next()
+                self.parse_tunnel(TunnelType::L2tpv3)
             }
-
             IpProto::IPV6_NONXT => {
                 // No next header - we're done
                 self.next_layer = NextLayer::Done;
-                self.done = true;
                 None
             }
             _ => {
@@ -613,13 +626,14 @@ impl<'a> PacketIter<'a> {
                     data: self.remaining,
                 };
                 self.remaining = &[];
-                self.done = true;
+                self.next_layer = NextLayer::Done;
                 Some(Ok(header))
             }
         }
     }
 
     /// Parse tunnel header
+    #[inline(always)]
     fn parse_tunnel(
         &mut self,
         tunnel_type: TunnelType,
@@ -633,7 +647,7 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Vxlan(vxlan)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
@@ -646,7 +660,7 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Geneve(geneve)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
@@ -664,7 +678,7 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Gre(gre)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
@@ -683,7 +697,7 @@ impl<'a> PacketIter<'a> {
                         Some(Ok(Header::Mpls(mpls_stack)))
                     }
                     None => {
-                        self.done = true;
+                        self.next_layer = NextLayer::Done;
                         Some(Err(PacketHeaderError::TooShort("MPLS")))
                     }
                 }
@@ -698,7 +712,7 @@ impl<'a> PacketIter<'a> {
                         Some(Ok(Header::Teredo(Box::new(teredo))))
                     }
                     Err(e) => {
-                        self.done = true;
+                        self.next_layer = NextLayer::Done;
                         Some(Err(e))
                     }
                 }
@@ -723,7 +737,7 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Gtpv1(gtpv1)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
@@ -735,7 +749,7 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Gtpv2(gtpv2)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
@@ -749,7 +763,7 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::L2tpv2(l2tpv2)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
@@ -776,7 +790,7 @@ impl<'a> PacketIter<'a> {
                         Some(Ok(Header::L2tpv3(l2tpv3)))
                     }
                     Err(e) => {
-                        self.done = true;
+                        self.next_layer = NextLayer::Done;
                         Some(Err(e))
                     }
                 }
@@ -789,7 +803,7 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Nvgre(nvgre)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
@@ -803,7 +817,7 @@ impl<'a> PacketIter<'a> {
                         Some(Ok(Header::Pbb(pbb)))
                     }
                     Err(e) => {
-                        self.done = true;
+                        self.next_layer = NextLayer::Done;
                         Some(Err(e))
                     }
                 }
@@ -818,7 +832,7 @@ impl<'a> PacketIter<'a> {
                         Some(Ok(Header::Stt(stt)))
                     }
                     None => {
-                        self.done = true;
+                        self.next_layer = NextLayer::Done;
                         Some(Err(PacketHeaderError::TooShort("STT")))
                     }
                 }
@@ -832,7 +846,7 @@ impl<'a> PacketIter<'a> {
                     Some(Ok(Header::Pptp(pptp)))
                 }
                 Err(e) => {
-                    self.done = true;
+                    self.next_layer = NextLayer::Done;
                     Some(Err(e))
                 }
             },
@@ -845,12 +859,8 @@ impl<'a> Iterator for PacketIter<'a> {
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
-
         if self.remaining.is_empty() {
-            self.done = true;
+            self.next_layer = NextLayer::Done;
             return None;
         }
 
@@ -859,10 +869,7 @@ impl<'a> Iterator for PacketIter<'a> {
             NextLayer::Network(ether_proto) => self.parse_network(ether_proto),
             NextLayer::Transport(ip_proto) => self.parse_transport(ip_proto),
             NextLayer::Tunnel(tunnel_type) => self.parse_tunnel(tunnel_type),
-            NextLayer::Done => {
-                self.done = true;
-                None
-            }
+            NextLayer::Done => None,
         }
     }
 }
@@ -874,6 +881,7 @@ pub trait PacketIterExt {
 }
 
 impl PacketIterExt for [u8] {
+    #[inline(always)]
     fn headers(&self, link_type: LinkType) -> PacketIter<'_> {
         PacketIter::new(self, link_type)
     }
