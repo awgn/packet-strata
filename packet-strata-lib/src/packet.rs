@@ -138,7 +138,7 @@ pub trait HeaderParser: PacketHeader + FromBytes + KnownLayout + Immutable + Una
 }
 
 /// Maximum number of tunnel layers stored inline (without heap allocation)
-const MAX_INLINE_TUNNELS: usize = 4;
+const MAX_INLINE_TUNNELS: usize = 2;
 
 /// Parse mode for packet parsing
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -183,8 +183,7 @@ pub struct Packet<'a> {
 }
 
 impl<'a> Packet<'a> {
-    /// Parse a packet from raw bytes using the specified link type and parse mode.
-    ///
+    /// Parse a packet from raw bytes using the specified link type and parse mode.\n    ///
     /// This method directly parses all protocol layers without using an iterator,
     /// collecting them into a structured `Packet`.
     ///
@@ -193,30 +192,272 @@ impl<'a> Packet<'a> {
     /// * `buf` - The raw packet bytes
     /// * `link_type` - The link layer type of the packet
     /// * `mode` - Parse mode: `Outermost` ignores tunnels, `Innermost` parses through them
-    #[inline]
+    #[inline(always)]
     pub fn from_bytes(
         buf: &'a [u8],
         link_type: LinkType,
         mode: ParseMode,
     ) -> Result<Self, PacketHeaderError> {
-        let mut remaining = buf;
-        let mut next_layer = NextLayer::Link(link_type);
+        let (link, ether_proto, remaining) = Self::parse_link_proto(buf, link_type)?;
 
-        let mut link: Option<LinkLayer<'a>> = None;
+        if ether_proto == EtherProto::IPV4 {
+            let (ipv4, rest) = Ipv4Header::from_bytes(remaining)?;
+            let proto = ipv4.protocol();
+            if proto != IpProto::IP_ENCAP && proto != IpProto::IPV6 {
+                return Self::parse_transport_fast(
+                    link,
+                    NetworkLayer::Ipv4(ipv4),
+                    proto,
+                    rest,
+                    mode,
+                );
+            }
+            if mode == ParseMode::Outermost {
+                return Ok(Packet {
+                    link,
+                    arp: None,
+                    network: None,
+                    transport: None,
+                    tunnel: SmallVec::new(),
+                    data: rest,
+                });
+            }
+            return Self::from_bytes_tunnel(
+                link,
+                None,
+                None,
+                NextLayer::Network(EtherProto::IPV4),
+                remaining,
+                mode,
+            );
+        }
+
+        Self::from_bytes_non_ipv4(link, ether_proto, remaining, mode)
+    }
+
+    #[inline(always)]
+    fn parse_transport_fast(
+        link: LinkLayer<'a>,
+        net: NetworkLayer<'a>,
+        ip_proto: IpProto,
+        remaining: &'a [u8],
+        mode: ParseMode,
+    ) -> Result<Self, PacketHeaderError> {
+        if ip_proto == IpProto::TCP {
+            let (tcp, rest) = TcpHeader::from_bytes(remaining)?;
+            if mode != ParseMode::Outermost
+                && (is_stt_port(tcp.dst_port()) || is_stt_port(tcp.src_port()))
+            {
+                return Self::from_bytes_tunnel(
+                    link,
+                    Some(net),
+                    Some(TransportLayer::Tcp(tcp)),
+                    NextLayer::Tunnel(TunnelType::Stt),
+                    rest,
+                    mode,
+                );
+            }
+            return Ok(Packet {
+                link,
+                arp: None,
+                network: Some(net),
+                transport: Some(TransportLayer::Tcp(tcp)),
+                tunnel: SmallVec::new(),
+                data: rest,
+            });
+        }
+
+        if ip_proto == IpProto::SCTP {
+            let (sctp, rest) = SctpHeader::from_bytes(remaining)?;
+            return Ok(Packet {
+                link,
+                arp: None,
+                network: Some(net),
+                transport: Some(TransportLayer::Sctp(sctp)),
+                tunnel: SmallVec::new(),
+                data: rest,
+            });
+        }
+
+        if ip_proto == IpProto::UDP {
+            let (udp, rest) = UdpHeader::from_bytes(remaining)?;
+            if mode != ParseMode::Outermost {
+                if let Some(tunnel_type) = detect_udp_tunnel(udp.src_port(), udp.dst_port(), rest) {
+                    return Self::from_bytes_tunnel(
+                        link,
+                        Some(net),
+                        Some(TransportLayer::Udp(udp)),
+                        NextLayer::Tunnel(tunnel_type),
+                        rest,
+                        mode,
+                    );
+                }
+            }
+            return Ok(Packet {
+                link,
+                arp: None,
+                network: Some(net),
+                transport: Some(TransportLayer::Udp(udp)),
+                tunnel: SmallVec::new(),
+                data: rest,
+            });
+        }
+
+        if ip_proto == IpProto::ICMP {
+            let (icmp, rest) = IcmpHeader::from_bytes(remaining)?;
+            return Ok(Packet {
+                link,
+                arp: None,
+                network: Some(net),
+                transport: Some(TransportLayer::Icmp(icmp)),
+                tunnel: SmallVec::new(),
+                data: rest,
+            });
+        }
+
+        if ip_proto == IpProto::IPV6_ICMP {
+            let (icmp6, rest) = Icmp6Header::from_bytes(remaining)?;
+            return Ok(Packet {
+                link,
+                arp: None,
+                network: Some(net),
+                transport: Some(TransportLayer::Icmp6(icmp6)),
+                tunnel: SmallVec::new(),
+                data: rest,
+            });
+        }
+
+        if mode != ParseMode::Outermost {
+            if ip_proto == IpProto::GRE {
+                let tunnel_type = detect_gre_variant(remaining);
+                return Self::from_bytes_tunnel(
+                    link,
+                    Some(net),
+                    None,
+                    NextLayer::Tunnel(tunnel_type),
+                    remaining,
+                    mode,
+                );
+            }
+            if ip_proto == IpProto::L2TP {
+                return Self::from_bytes_tunnel(
+                    link,
+                    Some(net),
+                    None,
+                    NextLayer::Tunnel(TunnelType::L2tpv3),
+                    remaining,
+                    mode,
+                );
+            }
+        }
+
+        Ok(Packet {
+            link,
+            arp: None,
+            network: Some(net),
+            transport: None,
+            tunnel: SmallVec::new(),
+            data: remaining,
+        })
+    }
+
+    #[inline(always)]
+    fn from_bytes_non_ipv4(
+        link: LinkLayer<'a>,
+        ether_proto: EtherProto,
+        remaining: &'a [u8],
+        mode: ParseMode,
+    ) -> Result<Self, PacketHeaderError> {
+        match ether_proto {
+            EtherProto::IPV6 => {
+                let (ipv6, rest) = Ipv6Header::from_bytes(remaining)?;
+                let next_proto = if ipv6.raw_extensions.is_empty() {
+                    ipv6.next_header()
+                } else {
+                    find_ipv6_upper_protocol(&ipv6)
+                };
+                if next_proto != IpProto::IP_ENCAP && next_proto != IpProto::IPV6 {
+                    return Self::parse_transport_fast(
+                        link,
+                        NetworkLayer::Ipv6(ipv6),
+                        next_proto,
+                        rest,
+                        mode,
+                    );
+                }
+                if mode == ParseMode::Outermost {
+                    return Ok(Packet {
+                        link,
+                        arp: None,
+                        network: None,
+                        transport: None,
+                        tunnel: SmallVec::new(),
+                        data: rest,
+                    });
+                }
+                Self::from_bytes_tunnel(
+                    link,
+                    None,
+                    None,
+                    NextLayer::Network(EtherProto::IPV6),
+                    remaining,
+                    mode,
+                )
+            }
+            EtherProto::ARP => {
+                let (arp, rest) = ArpHeader::from_bytes(remaining)?;
+                Ok(Packet {
+                    link,
+                    arp: Some(arp),
+                    network: None,
+                    transport: None,
+                    tunnel: SmallVec::new(),
+                    data: rest,
+                })
+            }
+            EtherProto::MPLS_UC
+            | EtherProto::MPLS_MC
+            | EtherProto::TEB
+            | EtherProto::VLAN_8021AH
+            | EtherProto::VLAN_8021AD => Self::from_bytes_tunnel(
+                link,
+                None,
+                None,
+                NextLayer::Network(ether_proto),
+                remaining,
+                mode,
+            ),
+            _ => Ok(Packet {
+                link,
+                arp: None,
+                network: None,
+                transport: None,
+                tunnel: SmallVec::new(),
+                data: remaining,
+            }),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn from_bytes_tunnel(
+        mut link: LinkLayer<'a>,
+        mut network: Option<NetworkLayer<'a>>,
+        mut transport: Option<TransportLayer<'a>>,
+        mut next_layer: NextLayer,
+        mut remaining: &'a [u8],
+        mode: ParseMode,
+    ) -> Result<Self, PacketHeaderError> {
         let mut arp: Option<ArpHeaderFull<'a>> = None;
-        let mut network: Option<NetworkLayer<'a>> = None;
-        let mut transport: Option<TransportLayer<'a>> = None;
         let mut tunnel: SmallVec<[NetworkTunnelLayer<'a>; MAX_INLINE_TUNNELS]> = SmallVec::new();
-
-        // Track outer IP for tunnel encapsulation
-        let mut outer_ip_for_tunnel: Option<NetworkLayer<'a>> = None;
+        let mut outer_ip_for_tunnel: Option<NetworkLayer<'a>> = network.clone();
 
         loop {
             match next_layer {
                 NextLayer::Link(lt) => {
-                    let (link_layer, next, rest) = Self::parse_link(remaining, lt)?;
-                    link = Some(link_layer);
-                    next_layer = next;
+                    let (link_layer, next_proto, rest) = Self::parse_link_proto(remaining, lt)?;
+                    link = link_layer;
+                    next_layer = NextLayer::Network(next_proto);
                     remaining = rest;
                 }
                 NextLayer::Network(ether_proto) => {
@@ -326,8 +567,6 @@ impl<'a> Packet<'a> {
             }
         }
 
-        let link = link.ok_or(PacketHeaderError::TooShort("link layer"))?;
-
         Ok(Packet {
             link,
             arp,
@@ -339,45 +578,37 @@ impl<'a> Packet<'a> {
     }
 
     /// Parse link layer
-    #[inline]
-    fn parse_link(
+    #[inline(always)]
+    fn parse_link_proto(
         buf: &'a [u8],
         link_type: LinkType,
-    ) -> Result<(LinkLayer<'a>, NextLayer, &'a [u8]), PacketHeaderError> {
+    ) -> Result<(LinkLayer<'a>, EtherProto, &'a [u8]), PacketHeaderError> {
+        if link_type == LinkType::Ethernet {
+            let (eth, rest) = EtherHeader::from_bytes(buf)?;
+            let next_proto = eth.inner_type();
+            return Ok((LinkLayer::Ethernet(eth), next_proto, rest));
+        }
+
         match link_type {
-            LinkType::Ethernet => {
-                let (eth, rest) = EtherHeader::from_bytes(buf)?;
-                let next_proto = eth.inner_type();
-                Ok((
-                    LinkLayer::Ethernet(eth),
-                    NextLayer::Network(next_proto),
-                    rest,
-                ))
-            }
+            LinkType::Ethernet => unreachable!(),
             LinkType::Sll => {
                 let (sll, rest) = SllHeader::from_bytes(buf)?;
                 let next_proto = sll.protocol();
-                Ok((LinkLayer::Sll(sll), NextLayer::Network(next_proto), rest))
+                Ok((LinkLayer::Sll(sll), next_proto, rest))
             }
             LinkType::Sllv2 => {
                 let (sll, rest) = Sllv2Header::from_bytes(buf)?;
                 let next_proto = sll.protocol();
-                Ok((LinkLayer::Sllv2(sll), NextLayer::Network(next_proto), rest))
+                Ok((LinkLayer::Sllv2(sll), next_proto, rest))
             }
             LinkType::Null => {
                 let (null, rest) = NullHeader::from_bytes(buf)?;
                 let next_proto = null.protocol();
-                Ok((LinkLayer::Null(null), NextLayer::Network(next_proto), rest))
+                Ok((LinkLayer::Null(null), next_proto, rest))
             }
-            LinkType::RawIpv4 => {
-                // Create a dummy null header for raw IP
-                // Actually we need to handle this differently - parse network directly
-                // For RawIpv4/RawIpv6, we don't have a link layer header
-                // We'll create a special case
-                Err(PacketHeaderError::Other(
-                    "RawIpv4 requires special handling",
-                ))
-            }
+            LinkType::RawIpv4 => Err(PacketHeaderError::Other(
+                "RawIpv4 requires special handling",
+            )),
             LinkType::RawIpv6 => Err(PacketHeaderError::Other(
                 "RawIpv6 requires special handling",
             )),
@@ -419,7 +650,11 @@ impl<'a> Packet<'a> {
             }
             EtherProto::IPV6 => {
                 let (ipv6, rest) = Ipv6Header::from_bytes(buf)?;
-                let next_proto = find_ipv6_upper_protocol(&ipv6);
+                let next_proto = if ipv6.raw_extensions.is_empty() {
+                    ipv6.next_header()
+                } else {
+                    find_ipv6_upper_protocol(&ipv6)
+                };
 
                 if next_proto == IpProto::IP_ENCAP {
                     // IPv4-in-IPv6 (IP4in6) tunnel
@@ -713,37 +948,41 @@ impl<'a> Packet<'a> {
     }
 
     /// Returns a reference to the link layer header.
-    #[inline]
+    #[inline(always)]
     pub fn link(&self) -> &LinkLayer<'a> {
         &self.link
     }
 
     /// Returns a reference to the ARP header, if present.
-    #[inline]
+    #[inline(always)]
     pub fn arp(&self) -> Option<&ArpHeaderFull<'a>> {
         self.arp.as_ref()
     }
 
     /// Returns a reference to the network layer header, if present.
-    #[inline]
+    #[inline(always)]
     pub fn network(&self) -> Option<&NetworkLayer<'a>> {
         self.network.as_ref()
     }
 
     /// Returns a reference to the transport layer header, if present.
-    #[inline]
+    #[inline(always)]
     pub fn transport(&self) -> Option<&TransportLayer<'a>> {
         self.transport.as_ref()
     }
 
     /// Returns a slice of IP tunnel layer headers.
-    #[inline]
+    #[inline(always)]
     pub fn tunnels(&self) -> &[NetworkTunnelLayer<'a>] {
-        &self.tunnel
+        if self.tunnel.is_empty() {
+            &[]
+        } else {
+            &self.tunnel
+        }
     }
 
     /// Returns the remaining payload data after all parsed headers.
-    #[inline]
+    #[inline(always)]
     pub fn data(&self) -> &'a [u8] {
         self.data
     }

@@ -184,6 +184,123 @@ pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
     }
 }
 
+#[cold]
+#[inline(never)]
+fn dump_full_packet<Meta: PacketMetadata>(
+    total_packets: u64,
+    meta: &Meta,
+    packet: &Packet<'_>,
+) {
+    println!(
+        "{:>5}   {} ({} bytes)",
+        total_packets,
+        meta.timestamp(),
+        meta.data().len()
+    );
+    print!("{}", packet);
+}
+
+#[inline(always)]
+fn track_flow_v4<'a, Meta: PacketMetadata>(
+    meta: &'a Meta,
+    packet: &Packet<'a>,
+    flow_tracker: &mut FlowTracker,
+) {
+    if let Some(tuple) = TupleV4::new(packet, &mut flow_tracker.vni_mapper) {
+        let flow = flow_tracker.v4.get_or_insert_with(
+            &Symmetric(tuple),
+            || -> Flow<TupleV4, ()> {
+                let dir = PacketDirection::infer(packet);
+                Flow::<TupleV4, ()>::new(meta.timestamp(), tuple, packet, dir)
+            },
+        );
+
+        let dir = flow.packet_dir(packet);
+        flow.process(meta, packet, dir);
+    }
+}
+
+#[inline(always)]
+fn track_flow_v6<'a, Meta: PacketMetadata>(
+    meta: &'a Meta,
+    packet: &Packet<'a>,
+    flow_tracker: &mut FlowTracker,
+) {
+    if let Some(tuple) = TupleV6::new(packet, &mut flow_tracker.vni_mapper) {
+        let flow = flow_tracker.v6.get_or_insert_with(
+            &Symmetric(tuple),
+            || -> Flow<TupleV6, ()> {
+                let dir = PacketDirection::infer(packet);
+                Flow::<TupleV6, ()>::new(meta.timestamp(), tuple, packet, dir)
+            },
+        );
+
+        let dir = flow.packet_dir(packet);
+        flow.process(meta, packet, dir);
+    }
+}
+
+#[inline(always)]
+fn record_full_packet_stats(packet: &Packet<'_>, local_stats: &mut LocalStats) {
+    // Update stats for link layer
+    match packet.link() {
+        LinkLayer::Ethernet(_) => local_stats.ethernet += 1,
+        LinkLayer::Sll(_) => local_stats.sll += 1,
+        LinkLayer::Sllv2(_) => local_stats.sllv2 += 1,
+        LinkLayer::Null(_) => local_stats.null += 1,
+    }
+
+    // Update stats for ARP
+    if packet.arp().is_some() {
+        local_stats.arp += 1;
+    }
+
+    // Update stats for network layer
+    if let Some(network) = packet.network() {
+        match network {
+            NetworkLayer::Ipv4(_) => local_stats.ipv4 += 1,
+            NetworkLayer::Ipv6(_) => local_stats.ipv6 += 1,
+            NetworkLayer::Mpls(_) => local_stats.mpls += 1,
+        }
+    }
+
+    // Update stats for transport layer
+    if let Some(transport) = packet.transport() {
+        match transport {
+            TransportLayer::Tcp(_) => local_stats.tcp += 1,
+            TransportLayer::Udp(_) => local_stats.udp += 1,
+            TransportLayer::Sctp(_) => local_stats.sctp += 1,
+            TransportLayer::Icmp(_) => local_stats.icmp += 1,
+            TransportLayer::Icmp6(_) => local_stats.icmpv6 += 1,
+        }
+    }
+
+    // Update stats for tunnel layers
+    for ip_tunnel in packet.tunnels() {
+        match &ip_tunnel.tunnel {
+            TunnelLayer::Vxlan(_) => local_stats.vxlan += 1,
+            TunnelLayer::Geneve(_) => local_stats.geneve += 1,
+            TunnelLayer::Gre(_) => local_stats.gre += 1,
+            TunnelLayer::Nvgre(_) => local_stats.nvgre += 1,
+            TunnelLayer::Teredo(_) => local_stats.teredo += 1,
+            TunnelLayer::Gtpv1(_) => local_stats.gtpv1 += 1,
+            TunnelLayer::Gtpv2(_) => local_stats.gtpv2 += 1,
+            TunnelLayer::L2tpv2(_) => local_stats.l2tpv2 += 1,
+            TunnelLayer::L2tpv3(_) => local_stats.l2tpv3 += 1,
+            TunnelLayer::Pbb(_) => local_stats.pbb += 1,
+            TunnelLayer::Stt(_) => local_stats.stt += 1,
+            TunnelLayer::Pptp(_) => local_stats.pptp += 1,
+            TunnelLayer::Ipip(tunnel) => match tunnel.tunnel_type() {
+                IpipType::Ipip => local_stats.ipip += 1,
+                IpipType::Sit => local_stats.sit += 1,
+                IpipType::Ip4in6 => local_stats.ip4in6 += 1,
+                IpipType::Ip6Tnl => local_stats.ip6tnl += 1,
+            },
+        }
+    }
+}
+
+#[inline(always)]
 pub fn process_full_packet<'a, Meta: PacketMetadata>(
     _pkt_count: u64,
     link_type: &mut Option<LinkType>,
@@ -196,131 +313,38 @@ pub fn process_full_packet<'a, Meta: PacketMetadata>(
     local_stats.total_packets += 1;
     local_stats.total_bytes += meta.caplen() as u64;
 
-    if link_type.is_none() {
-        *link_type = Some(PacketIter::guess_link_type(meta.data()));
-    }
-
-    match Packet::from_bytes(meta.data(), link_type.unwrap(), ParseMode::Innermost) {
-        Ok(packet) => {
-            if args.dump_packet {
-                println!(
-                    "{:>5}   {} ({} bytes)",
-                    local_stats.total_packets,
-                    meta.timestamp(),
-                    meta.data().len()
-                );
-                print!("{}", packet);
-            }
-
-            // Update stats for link layer
-            match packet.link() {
-                LinkLayer::Ethernet(_) => local_stats.ethernet += 1,
-                LinkLayer::Sll(_) => local_stats.sll += 1,
-                LinkLayer::Sllv2(_) => local_stats.sllv2 += 1,
-                LinkLayer::Null(_) => local_stats.null += 1,
-            }
-
-            // Update stats for ARP
-            if packet.arp().is_some() {
-                local_stats.arp += 1;
-            }
-
-            // Update stats for network layer
-            if let Some(network) = packet.network() {
-                match network {
-                    NetworkLayer::Ipv4(_) => {
-                        local_stats.ipv4 += 1;
-                        if args.flow_tracker {
-                            if let Some(tuple) = TupleV4::new(&packet, &mut flow_tracker.vni_mapper)
-                            {
-                                let flow = flow_tracker.v4.get_or_insert_with(
-                                    &Symmetric(tuple),
-                                    || -> Flow<TupleV4, ()> {
-                                        let dir = PacketDirection::infer(&packet);
-                                        Flow::<TupleV4, ()>::new(
-                                            meta.timestamp(),
-                                            tuple,
-                                            &packet,
-                                            dir,
-                                        )
-                                    },
-                                );
-
-                                let dir = flow.packet_dir(&packet);
-                                flow.process(meta, &packet, dir);
-                            }
-                        }
-                    }
-                    NetworkLayer::Ipv6(_) => {
-                        local_stats.ipv6 += 1;
-                        if args.flow_tracker {
-                            if let Some(tuple) = TupleV6::new(&packet, &mut flow_tracker.vni_mapper)
-                            {
-                                let flow = flow_tracker.v6.get_or_insert_with(
-                                    &Symmetric(tuple),
-                                    || -> Flow<TupleV6, ()> {
-                                        let dir = PacketDirection::infer(&packet);
-                                        Flow::<TupleV6, ()>::new(
-                                            meta.timestamp(),
-                                            tuple,
-                                            &packet,
-                                            dir,
-                                        )
-                                    },
-                                );
-
-                                let dir = flow.packet_dir(&packet);
-                                flow.process(meta, &packet, dir);
-                            }
-                        }
-                    }
-                    NetworkLayer::Mpls(_) => local_stats.mpls += 1,
-                }
-            }
-
-            // Update stats for transport layer
-            if let Some(transport) = packet.transport() {
-                match transport {
-                    TransportLayer::Tcp(_) => local_stats.tcp += 1,
-                    TransportLayer::Udp(_) => local_stats.udp += 1,
-                    TransportLayer::Sctp(_) => local_stats.sctp += 1,
-                    TransportLayer::Icmp(_) => local_stats.icmp += 1,
-                    TransportLayer::Icmp6(_) => local_stats.icmpv6 += 1,
-                }
-            }
-
-            // Update stats for tunnel layers
-            for ip_tunnel in packet.tunnels() {
-                match &ip_tunnel.tunnel {
-                    TunnelLayer::Vxlan(_) => local_stats.vxlan += 1,
-                    TunnelLayer::Geneve(_) => local_stats.geneve += 1,
-                    TunnelLayer::Gre(_) => local_stats.gre += 1,
-                    TunnelLayer::Nvgre(_) => local_stats.nvgre += 1,
-                    TunnelLayer::Teredo(_) => local_stats.teredo += 1,
-                    TunnelLayer::Gtpv1(_) => local_stats.gtpv1 += 1,
-                    TunnelLayer::Gtpv2(_) => local_stats.gtpv2 += 1,
-                    TunnelLayer::L2tpv2(_) => local_stats.l2tpv2 += 1,
-                    TunnelLayer::L2tpv3(_) => local_stats.l2tpv3 += 1,
-                    TunnelLayer::Pbb(_) => local_stats.pbb += 1,
-                    TunnelLayer::Stt(_) => local_stats.stt += 1,
-                    TunnelLayer::Pptp(_) => local_stats.pptp += 1,
-                    TunnelLayer::Ipip(tunnel) => match tunnel.tunnel_type() {
-                        IpipType::Ipip => local_stats.ipip += 1,
-                        IpipType::Sit => local_stats.sit += 1,
-                        IpipType::Ip4in6 => local_stats.ip4in6 += 1,
-                        IpipType::Ip6Tnl => local_stats.ip6tnl += 1,
-                    },
-                }
-            }
+    let lt = match *link_type {
+        Some(lt) => lt,
+        None => {
+            let guessed = PacketIter::guess_link_type(meta.data());
+            *link_type = Some(guessed);
+            guessed
         }
-        Err(e) => {
-            use packet_strata::packet::PacketHeaderError;
-            match e {
-                PacketHeaderError::TooShort(_) => local_stats.too_small += 1,
-                PacketHeaderError::Invalid(_) => local_stats.invalid += 1,
-                PacketHeaderError::InsufficientLength(_) => local_stats.insufficient_len += 1,
-                PacketHeaderError::Other(_) => local_stats.other_errors += 1,
+    };
+
+    if !args.flow_tracker && !args.dump_packet {
+        match Packet::from_bytes(meta.data(), lt, ParseMode::Innermost) {
+            Ok(packet) => record_full_packet_stats(&packet, local_stats),
+            Err(e) => record_error_stats(e, local_stats),
+        }
+    } else {
+        match Packet::from_bytes(meta.data(), lt, ParseMode::Innermost) {
+            Ok(packet) => {
+                if args.dump_packet {
+                    dump_full_packet(local_stats.total_packets, meta, &packet);
+                }
+
+                record_full_packet_stats(&packet, local_stats);
+
+                if args.flow_tracker {
+                    match packet.network() {
+                        Some(NetworkLayer::Ipv4(_)) => track_flow_v4(meta, &packet, flow_tracker),
+                        Some(NetworkLayer::Ipv6(_)) => track_flow_v6(meta, &packet, flow_tracker),
+                        _ => {}
+                    }
+                }
             }
+            Err(e) => record_error_stats(e, local_stats),
         }
     }
 
