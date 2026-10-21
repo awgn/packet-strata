@@ -162,11 +162,16 @@ impl TcpState {
     fn update_with_ts(
         &mut self,
         pkt: &Packet<'_>,
-        _dir: PacketDirection,
+        dir: PacketDirection,
         ts: Timestamp,
         metrics: &FlowMetrics,
     ) {
         if let Some(TransportLayer::Tcp(hdr)) = pkt.transport() {
+            match dir {
+                PacketDirection::Upwards => self.u_seq = hdr.sequence_number(),
+                PacketDirection::Downwards => self.d_seq = hdr.sequence_number(),
+            }
+
             if hdr.has_rst() {
                 // R
                 self.status = TcpStatus::Reset;
@@ -182,7 +187,6 @@ impl TcpState {
                     // S|A
                     self.status = TcpStatus::SynReceived;
                     self.ts_syn_ack = ts;
-                    self.d_seq = hdr.sequence_number();
                     if self.ts_syn.0 > 0 {
                         self.rtt_net = ts - self.ts_syn;
                     }
@@ -224,13 +228,13 @@ impl TcpState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct FlowMetrics {
     /// Total uplink bytes.
-    pub u_bytes: usize,
+    pub u_bytes: u64,
     /// Total downlink bytes.
-    pub d_bytes: usize,
+    pub d_bytes: u64,
     /// Total uplink payload bytes.
-    pub u_payload_bytes: usize,
+    pub u_payload_bytes: u64,
     /// Total downlink payload bytes.
-    pub d_payload_bytes: usize,
+    pub d_payload_bytes: u64,
     /// Total uplink packets.
     pub u_pkts: u32,
     /// Total downlink packets.
@@ -257,8 +261,8 @@ impl FlowMetrics {
         dir: PacketDirection,
         meta: &Meta,
     ) {
-        let payload_len = pkt.data().len();
-        let caplen = meta.caplen() as usize;
+        let payload_len = pkt.data().len() as u64;
+        let caplen = meta.caplen() as u64;
         let is_payload = payload_len > 0;
         match dir {
             PacketDirection::Upwards => {
@@ -554,6 +558,20 @@ mod tests {
         flags: u8,
         payload: &[u8],
     ) -> Vec<u8> {
+        build_tcp_ipv4_with_seq(src_ip, dst_ip, src_port, dst_port, 100, 200, flags, payload)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_tcp_ipv4_with_seq(
+        src_ip: [u8; 4],
+        dst_ip: [u8; 4],
+        src_port: u16,
+        dst_port: u16,
+        seq: u32,
+        ack: u32,
+        flags: u8,
+        payload: &[u8],
+    ) -> Vec<u8> {
         let total_len = (20 + 20 + payload.len()) as u16;
         let mut buf = Vec::with_capacity(14 + total_len as usize);
         buf.extend_from_slice(&[0x00, 0x00, 0x0C, 0x33, 0x44, 0x55]);
@@ -570,8 +588,8 @@ mod tests {
         buf.extend_from_slice(&dst_ip);
         buf.extend_from_slice(&src_port.to_be_bytes());
         buf.extend_from_slice(&dst_port.to_be_bytes());
-        buf.extend_from_slice(&100u32.to_be_bytes());
-        buf.extend_from_slice(&200u32.to_be_bytes());
+        buf.extend_from_slice(&seq.to_be_bytes());
+        buf.extend_from_slice(&ack.to_be_bytes());
         buf.push(0x50);
         buf.push(flags);
         buf.extend_from_slice(&65535u16.to_be_bytes());
@@ -591,7 +609,7 @@ mod tests {
 
         // Packet 1: Mid-stream empty ACK from Server (55000) -> Client (50000).
         // Phase 1 (`Flow::new` + `flow.update`) guesses Upwards (55000 > 50000) with Confidence::Low.
-        let raw1 = build_tcp_ipv4(srv_ip, clt_ip, srv_port, clt_port, 0x10, &[]);
+        let raw1 = build_tcp_ipv4_with_seq(srv_ip, clt_ip, srv_port, clt_port, 2000, 1000, 0x10, &[]);
         let pkt1 = Packet::from_bytes(&raw1, LinkType::Ethernet, ParseMode::Outermost).unwrap();
         let tuple1 = TupleV4::new(&pkt1, &mut vni).unwrap();
 
@@ -608,9 +626,11 @@ mod tests {
         assert_eq!(d1, PacketDirection::Upwards);
         assert_eq!(flow.base.metrics.u_pkts, 1);
         assert_eq!(flow.base.metrics.d_pkts, 0);
+        assert_eq!(flow.base.tcp.u_seq, 2000);
+        assert_eq!(flow.base.tcp.d_seq, 0);
 
         // Packet 2: Empty ACK from Client (50000) -> Server (55000).
-        let raw2 = build_tcp_ipv4(clt_ip, srv_ip, clt_port, srv_port, 0x10, &[]);
+        let raw2 = build_tcp_ipv4_with_seq(clt_ip, srv_ip, clt_port, srv_port, 1000, 2000, 0x10, &[]);
         let pkt2 = Packet::from_bytes(&raw2, LinkType::Ethernet, ParseMode::Outermost).unwrap();
         let d2 = flow.update(
             &DummyMeta {
@@ -623,17 +643,20 @@ mod tests {
         assert_eq!(flow.base.confidence, Confidence::Low);
         assert_eq!(flow.base.metrics.u_pkts, 1);
         assert_eq!(flow.base.metrics.d_pkts, 1);
+        assert_eq!(flow.base.tcp.u_seq, 2000);
+        assert_eq!(flow.base.tcp.d_seq, 1000);
 
         // Packet 3: Client (50000) -> Server (55000) sends HTTP GET request!
         // Phase 1 (`flow.update`) provisionally counts it as `Downwards` (`d_pkts` becomes 2, `d_payload_pkts` becomes 1).
-        let raw3 = build_tcp_ipv4(
+        let raw3 = build_tcp_ipv4_with_seq(
             clt_ip,
             srv_ip,
             clt_port,
             srv_port,
+            1005,
+            2000,
             0x18,
-            b"GET /index.html HTTP/1.1
-",
+            b"GET /index.html HTTP/1.1\r\n",
         );
         let pkt3 = Packet::from_bytes(&raw3, LinkType::Ethernet, ParseMode::Outermost).unwrap();
         let d3 = flow.update(
@@ -651,7 +674,7 @@ mod tests {
             flow.flip_direction();
         }
 
-        // Now the flow tuple, MACs, and ALL accumulated counters (including Packet 3!) are flipped and High confidence!
+        // Now the flow tuple, MACs, TCP seqs, and ALL accumulated counters (including Packet 3!) are flipped and High confidence!
         assert_eq!(flow.base.confidence, Confidence::High);
         assert_eq!(flow.base.id.tuple.source_port(), clt_port);
         assert_eq!(flow.base.id.tuple.dest_port(), srv_port);
@@ -659,6 +682,10 @@ mod tests {
         assert_eq!(flow.base.metrics.d_pkts, 1);
         assert_eq!(flow.base.metrics.u_payload_pkts, 1);
         assert_eq!(flow.base.metrics.d_payload_pkts, 0);
+        assert_eq!(flow.base.metrics.u_payload_bytes, 26u64);
+        assert_eq!(flow.base.metrics.d_payload_bytes, 0u64);
+        assert_eq!(flow.base.tcp.u_seq, 1005);
+        assert_eq!(flow.base.tcp.d_seq, 2000);
     }
 
     #[test]
