@@ -1,3 +1,65 @@
+//! Pure L4 packet direction and confidence inference
+//!
+//! This module implements a zero-DPI, purely Layer-4 direction inference engine that
+//! classifies packets into [`PacketDirection::Upwards`] (Client $\rightarrow$ Server) or
+//! [`PacketDirection::Downwards`] (Server $\rightarrow$ Client) along with a two-level
+//! [`Confidence`] (`High` or `Low`).
+//!
+//! # Inference Hierarchy
+//!
+//! 1. **Authoritative L4 Protocol Signals ([`Confidence::High`])**:
+//!    - **TCP**: `SYN` (without `ACK`) is always `Upwards`; `SYN-ACK` is always `Downwards`.
+//!    - **SCTP (RFC 4960)**: `Verification Tag == 0` or control chunks `INIT`, `COOKIE-ECHO`,
+//!      `SHUTDOWN` are `Upwards`; `INIT-ACK`, `COOKIE-ACK`, `SHUTDOWN-ACK`, `SHUTDOWN-COMPLETE`
+//!      are `Downwards`.
+//!    - **UDP**: Fixed DHCPv4 (`68 -> 67`) and DHCPv6 (`546 -> 547`) client/server port pairs.
+//!    - **ICMPv4 / ICMPv6**: Echo/Timestamp/Address/Neighbor/Router requests & solicitations are
+//!      `Upwards`; replies & advertisements are `Downwards`.
+//!
+//! 2. **5-Tier OS-Aware Port Ranking ([`Confidence::High`] across distinct tiers)**:
+//!    When no L4 handshake flag is present (e.g. mid-stream TCP/SCTP or general UDP), ports are
+//!    mapped into 5 priority tiers (`0` = highest server likelihood, `4` = highest ephemeral client likelihood):
+//!
+//!    | Rank | Port Range / Category | Rationale |
+//!    |------|-----------------------|-----------|
+//!    | `0`  | `0..=1024` (System / Well-Known) | Privileged IANA system ports (HTTP `80`, HTTPS `443`, DNS `53`, SSH `22`, etc.) |
+//!    | `1`  | Core Registered Service Ports (`> 1024`) | O(1) compile-time bitmap of major server ports (MySQL `3306`, PostgreSQL `5432`, Redis `6379`, Telco S1AP `36412` / NGAP `38412`, WireGuard `51820`, etc.) |
+//!    | `2`  | `1025..=32767` (Lower Registered) | Below the Linux ephemeral boundary (`32768`); never allocated as ephemeral client ports by modern OSes |
+//!    | `3`  | `32768..=49151` (Linux / Android Ephemeral) | Default Linux kernel `ip_local_port_range` (`32768..=60999`) |
+//!    | `4`  | `49152..=65535` (IANA / Windows / macOS / BSD Ephemeral) | RFC 6335 dynamic/private client port range |
+//!
+//! 3. **Same-Tier Tie-Breaker ([`Confidence::Low`])**:
+//!    If both ports fall into the exact same tier (e.g. two ephemeral ports `50000` and `55000`),
+//!    the higher port is provisionally treated as the client (`source > dest => Upwards`) with
+//!    [`Confidence::Low`], signaling that stateful L4 tracking or an external Phase 2 DPI engine
+//!    may flip the flow on subsequent packets.
+//!
+//! # Example
+//!
+//! ```
+//! use packet_strata::packet::iter::LinkType;
+//! use packet_strata::packet::{Packet, ParseMode};
+//! use packet_strata::tracker::direction::{Confidence, PacketDirection};
+//!
+//! // Ethernet + IPv4 + UDP response from DNS Server (1.1.1.1:53 -> 10.0.0.1:50000)
+//! let raw = [
+//!     0x00, 0x00, 0x00, 0x44, 0x55, 0x66,
+//!     0x00, 0x00, 0x0c, 0x11, 0x22, 0x33,
+//!     0x08, 0x00,
+//!     0x45, 0x00, 0x00, 0x1c, 0x00, 0x01, 0x00, 0x00, 0x40, 0x11, 0x00, 0x00,
+//!     1, 1, 1, 1,                         // Src IP: 1.1.1.1
+//!     10, 0, 0, 1,                        // Dst IP: 10.0.0.1
+//!     0x00, 0x35, 0xc3, 0x50,             // Src Port: 53 (Rank 0), Dst Port: 50000 (Rank 4)
+//!     0x00, 0x08, 0x00, 0x00,
+//! ];
+//!
+//! let pkt = Packet::from_bytes(&raw, LinkType::Ethernet, ParseMode::Innermost).unwrap();
+//! let (dir, confidence) = PacketDirection::infer_with_confidence(&pkt);
+//!
+//! assert_eq!(dir, PacketDirection::Downwards);
+//! assert_eq!(confidence, Confidence::High);
+//! ```
+
 use crate::packet::{
     header::TransportLayer,
     icmp::{IcmpHeader, IcmpType},

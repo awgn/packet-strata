@@ -1,3 +1,143 @@
+//! Stateful flow tracking and LRU lifecycle management
+//!
+//! This module provides high-performance, stateful flow tracking built on top of an
+//! intrusive LRU hash table (`LinkedHashMap` with `ahash`). It tracks bidirectional
+//! network flows across IPv4 ([`FlowTrackerV4`]), IPv6 ([`FlowTrackerV6`]), and
+//! Ethernet ([`FlowTrackerEth`]), automatically handling tunnel encapsulations via
+//! [`VniMapper`].
+//!
+//! # Two-Phase Flow Processing Architecture
+//!
+//! Flow tracking in `packet-strata` is designed around a **two-phase pipeline** that
+//! cleanly separates L3/L4 flow accounting from L7 Deep Packet Inspection (DPI):
+//!
+//! ```text
+//!                      Incoming Packet + Metadata
+//!                                  │
+//!                                  ▼
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │ Phase 1: packet-strata (L2/L3/L4 Flow Tracking & Direction)     │
+//! │  1. Extract 5-tuple + VNI stack (`Tuple::from_packet`)          │
+//! │  2. Lookup or insert in LRU table via `Symmetric<T>`            │
+//! │  3. Infer initial flow orientation & `Confidence` (`Low`/`High`)│
+//! │  4. Refine `Low` confidence flows on late L4 handshakes         │
+//! │  5. Update `FlowTiming`, `FlowMetrics`, `IpState`, `TcpState`   │
+//! └─────────────────────────────────────────────────────────────────┘
+//!                                  │
+//!                                  ▼ `dir: PacketDirection`
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │ Phase 2: User / External DPI Engine                             │
+//! │  - Runs via `D: Process` or right after `track_packet(...)`     │
+//! │  - Inspects L7 payload using the packet's `dir`                 │
+//! │  - If DPI detects that the initial orientation was inverted,    │
+//! │    calls `flow.flip_direction()` (or `base.flip_direction()`)   │
+//! │    to swap tuple, MACs, IP/TCP state, and `u_* <-> d_*` metrics │
+//! └─────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Examples
+//!
+//! ## Basic IPv4 Flow Tracking & Timeout Eviction
+//!
+//! ```
+//! use packet_strata::metadata::PacketMetadata;
+//! use packet_strata::packet::iter::LinkType;
+//! use packet_strata::packet::{Packet, ParseMode};
+//! use packet_strata::timestamp::Timestamp;
+//! use packet_strata::tracker::direction::PacketDirection;
+//! use packet_strata::tracker::vni::VniMapper;
+//! use packet_strata::tracker::FlowTrackerV4;
+//!
+//! struct RawPkt<'a> {
+//!     ts: Timestamp,
+//!     data: &'a [u8],
+//! }
+//!
+//! impl PacketMetadata for RawPkt<'_> {
+//!     fn timestamp(&self) -> Timestamp { self.ts }
+//!     fn caplen(&self) -> u32 { self.data.len() as u32 }
+//!     fn origlen(&self) -> u32 { self.data.len() as u32 }
+//!     fn data(&self) -> &[u8] { self.data }
+//! }
+//!
+//! // Minimal Ethernet + IPv4 + UDP packet (10.0.0.1:50000 -> 1.1.1.1:53)
+//! let raw = [
+//!     0x00, 0x00, 0x0c, 0x11, 0x22, 0x33, // Dst MAC
+//!     0x00, 0x00, 0x00, 0x44, 0x55, 0x66, // Src MAC
+//!     0x08, 0x00,                         // EtherType: IPv4
+//!     0x45, 0x00, 0x00, 0x20,             // IPv4 v4, IHL=5, Total Len=32
+//!     0x00, 0x01, 0x00, 0x00,             // ID=1, Flags=0
+//!     0x40, 0x11, 0x00, 0x00,             // TTL=64, Proto=UDP(17)
+//!     10, 0, 0, 1,                        // Src IP: 10.0.0.1
+//!     1, 1, 1, 1,                         // Dst IP: 1.1.1.1
+//!     0xc3, 0x50, 0x00, 0x35,             // Src Port: 50000, Dst Port: 53
+//!     0x00, 0x0c, 0x00, 0x00,             // UDP Len=12, Checksum=0
+//!     b'p', b'i', b'n', b'g',             // Payload
+//! ];
+//!
+//! let mut tracker: FlowTrackerV4 = FlowTrackerV4::with_capacity(1024);
+//! let mut vni_mapper = VniMapper::new();
+//!
+//! let meta = RawPkt { ts: Timestamp::from_nanos(10_000_000_000), data: &raw };
+//! let pkt = Packet::from_bytes(meta.data(), LinkType::Ethernet, ParseMode::Innermost).unwrap();
+//!
+//! // Phase 1: track packet and update flow counters
+//! let (flow, dir) = tracker.track_packet(&meta, &pkt, &mut vni_mapper).unwrap();
+//! assert_eq!(dir, PacketDirection::Upwards);
+//! assert_eq!(flow.base.metrics.u_pkts, 1);
+//! assert_eq!(flow.base.metrics.u_payload_bytes, 4);
+//!
+//! // Periodically evict flows idle since `ts <= 15s`
+//! let evicted = tracker.evict_expired(Timestamp::from_nanos(15_000_000_000), |_key, expired_flow| {
+//!     assert_eq!(expired_flow.base.metrics.u_pkts, 1);
+//! });
+//! assert_eq!(evicted, 1);
+//! assert!(tracker.is_empty());
+//! ```
+//!
+//! ## Phase 2: Custom DPI Engine & `flip_direction()`
+//!
+//! You can either embed your DPI state directly inside `Flow<T, MyDpi>` by implementing
+//! [`Process`], or run your DPI logic right after [`Tracker::track_packet`] and call
+//! [`Flow::flip_direction`] if the flow orientation needs to be inverted:
+//!
+//! ```
+//! use packet_strata::metadata::PacketMetadata;
+//! use packet_strata::packet::iter::LinkType;
+//! use packet_strata::packet::{Packet, ParseMode};
+//! use packet_strata::timestamp::Timestamp;
+//! use packet_strata::tracker::direction::PacketDirection;
+//! use packet_strata::tracker::flow::FlowBase;
+//! use packet_strata::tracker::process::Process;
+//! use packet_strata::tracker::tuple::Tuple;
+//! use packet_strata::tracker::vni::VniMapper;
+//! use packet_strata::tracker::FlowTrackerV4;
+//!
+//! #[derive(Default)]
+//! struct HttpDpi {
+//!     detected_http: bool,
+//! }
+//!
+//! impl Process for HttpDpi {
+//!     fn process<Meta: PacketMetadata, T: Tuple>(
+//!         &mut self,
+//!         _meta: &Meta,
+//!         pkt: &Packet<'_>,
+//!         dir: PacketDirection,
+//!         base: &mut FlowBase<T>,
+//!     ) {
+//!         if pkt.data().starts_with(b"GET ") {
+//!             self.detected_http = true;
+//!             // An HTTP GET request always travels from Client -> Server (Upwards).
+//!             // If Phase 1 provisionally classified this packet as Downwards, flip the flow!
+//!             if dir != PacketDirection::Upwards {
+//!                 base.flip_direction();
+//!             }
+//!         }
+//!     }
+//! }
+//! ```
+
 use ahash::RandomState;
 use hashlink::linked_hash_map::RawEntryMut;
 use hashlink::LinkedHashMap;

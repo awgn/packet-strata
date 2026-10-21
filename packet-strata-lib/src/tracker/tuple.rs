@@ -1,3 +1,57 @@
+//! Flow tuples and canonical symmetric hashing
+//!
+//! This module defines the [`Tuple`] trait and its concrete implementations:
+//! - [`TupleV4`]: IPv4 5-tuple (`src_ip`, `dst_ip`, `src_port`, `dst_port`, `protocol`) + [`VniId`]
+//! - [`TupleV6`]: IPv6 5-tuple (`src_ip`, `dst_ip`, `src_port`, `dst_port`, `protocol`) + [`VniId`]
+//! - [`TupleEth`]: Ethernet L2 3-tuple (`src`, `dst`, `protocol`)
+//!
+//! # Canonical Bidirectional Lookup (`Symmetric<T>`)
+//!
+//! By default, [`TupleV4`], [`TupleV6`], and [`TupleEth`] implement directional `Hash` and `Eq`
+//! (`(A -> B) != (B -> A)`). When tracking bidirectional flows in [`Tracker`](crate::tracker::Tracker),
+//! wrapping a tuple in [`Symmetric<T>`] switches `Hash` and `Eq` to [`Tuple::hash_canonical`] and
+//! [`Tuple::eq_canonical`], guaranteeing that:
+//! - `Hash(Symmetric(A -> B)) == Hash(Symmetric(B -> A))`
+//! - `Symmetric(A -> B) == Symmetric(B -> A)`
+//!
+//! This allows both uplink (`A -> B`) and downlink (`B -> A`) packets to resolve to the exact
+//! same flow entry in a single hash table lookup without allocating or mutating the key when
+//! [`Flow::flip_direction`](crate::tracker::flow::Flow::flip_direction) is called.
+//!
+//! # Example
+//!
+//! ```
+//! use std::collections::hash_map::DefaultHasher;
+//! use std::hash::{Hash, Hasher};
+//! use std::net::Ipv4Addr;
+//! use packet_strata::packet::protocol::IpProto;
+//! use packet_strata::tracker::tuple::{Symmetric, Tuple, TupleV4};
+//! use packet_strata::tracker::vni::VniId;
+//!
+//! let uplink = TupleV4 {
+//!     src_ip: Ipv4Addr::new(10, 0, 0, 1),
+//!     dst_ip: Ipv4Addr::new(1, 1, 1, 1),
+//!     src_port: 50000,
+//!     dst_port: 443,
+//!     protocol: IpProto::TCP,
+//!     vni: VniId::default(),
+//! };
+//!
+//! let downlink = uplink.flip();
+//!
+//! // Directional tuples are distinct:
+//! assert_ne!(uplink, downlink);
+//!
+//! // Symmetric wrappers are equal and produce the exact same hash:
+//! assert_eq!(Symmetric(uplink), Symmetric(downlink));
+//!
+//! let mut h1 = DefaultHasher::new();
+//! let mut h2 = DefaultHasher::new();
+//! Symmetric(uplink).hash(&mut h1);
+//! Symmetric(downlink).hash(&mut h2);
+//! assert_eq!(h1.finish(), h2.finish());
+//! ```
+
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
@@ -105,6 +159,8 @@ fn extract_ports(pkt: &Packet<'_>) -> (u16, u16) {
     pkt.transport().map(|t| t.ports()).unwrap_or((0, 0))
 }
 
+/// Zero-cost wrapper that switches a [`Tuple`]'s `Hash` and `PartialEq`/`Eq` implementations
+/// to [`Tuple::hash_canonical`] and [`Tuple::eq_canonical`] (`Symmetric(A -> B) == Symmetric(B -> A)`).
 #[derive(Debug, Copy, Clone)]
 #[repr(transparent)]
 pub struct Symmetric<T: Tuple>(pub T);
@@ -438,6 +494,7 @@ impl Tuple for TupleV6 {
     }
 }
 
+/// Ethernet Layer-2 3-tuple (`src` MAC, `dst` MAC, `protocol` EtherType)
 #[derive(Hash, Eq, PartialEq, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct TupleEth {
     pub src: EthAddr,

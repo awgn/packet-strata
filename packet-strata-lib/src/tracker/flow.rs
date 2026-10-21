@@ -1,3 +1,69 @@
+//! Bidirectional flow state, metrics, and TCP/IP tracking
+//!
+//! This module defines [`Flow<T, D>`] and its constituent sub-structures:
+//! - [`FlowBase<T>`]: Core protocol-agnostic and L3/L4 flow metadata:
+//!   - [`FlowId<T>`]: Canonical flow tuple (`T`, oriented from client to server), Ethernet protocol, and MAC addresses.
+//!   - [`FlowTiming`]: First-seen (`start`) and last-seen (`last`) [`Timestamp`]s.
+//!   - [`IpState`]: IPv4 IP-ID sequence tracking and estimated packet loss (`u_lost`, `d_lost`).
+//!   - [`TcpState`]: TCP connection state machine ([`TcpStatus`]), sequence numbers (`u_seq`, `d_seq`), and 3-way handshake RTT decomposition (`rtt`, `rtt_net`, `rtt_user`).
+//!   - [`Confidence`]: Two-level confidence (`Low` or `High`) in the flow's current client-server orientation.
+//!   - [`FlowMetrics`]: Bidirectional packet, byte, payload, and IPv4 fragmentation counters (`u_*` for uplink, `d_*` for downlink).
+//! - `data: D`: Custom user-defined per-flow state implementing [`Process`].
+//!
+//! # Examples
+//!
+//! ## Creating, Updating, and Flipping a Flow
+//!
+//! ```
+//! use packet_strata::metadata::PacketMetadata;
+//! use packet_strata::packet::iter::LinkType;
+//! use packet_strata::packet::{Packet, ParseMode};
+//! use packet_strata::timestamp::Timestamp;
+//! use packet_strata::tracker::direction::{Confidence, PacketDirection};
+//! use packet_strata::tracker::flow::{Flow, FlowIpV4};
+//! use packet_strata::tracker::tuple::TupleV4;
+//! use packet_strata::tracker::vni::VniMapper;
+//!
+//! struct Meta<'a> {
+//!     ts: Timestamp,
+//!     raw: &'a [u8],
+//! }
+//! impl PacketMetadata for Meta<'_> {
+//!     fn timestamp(&self) -> Timestamp { self.ts }
+//!     fn caplen(&self) -> u32 { self.raw.len() as u32 }
+//!     fn origlen(&self) -> u32 { self.raw.len() as u32 }
+//!     fn data(&self) -> &[u8] { self.raw }
+//! }
+//!
+//! // Ethernet + IPv4 + TCP SYN packet (10.0.0.1:50000 -> 10.0.0.2:443)
+//! let raw_syn = [
+//!     0x00, 0x00, 0x0c, 0x33, 0x44, 0x55,
+//!     0x00, 0x00, 0x00, 0x99, 0xaa, 0xbb,
+//!     0x08, 0x00,
+//!     0x45, 0x00, 0x00, 0x28, 0x00, 0x01, 0x40, 0x00, 0x40, 0x06, 0x00, 0x00,
+//!     10, 0, 0, 1,
+//!     10, 0, 0, 2,
+//!     0xc3, 0x50, 0x01, 0xbb,             // 50000 -> 443
+//!     0x00, 0x00, 0x03, 0xe8,             // Seq: 1000
+//!     0x00, 0x00, 0x00, 0x00,             // Ack: 0
+//!     0x50, 0x02, 0xff, 0xff,             // Flags: SYN (0x02)
+//!     0x00, 0x00, 0x00, 0x00,
+//! ];
+//!
+//! let mut vni = VniMapper::new();
+//! let pkt = Packet::from_bytes(&raw_syn, LinkType::Ethernet, ParseMode::Innermost).unwrap();
+//! let tuple = TupleV4::new(&pkt, &mut vni).unwrap();
+//!
+//! // Phase 1: Create and update flow
+//! let mut flow: FlowIpV4<()> = Flow::new(Timestamp::from_nanos(1_000_000_000), tuple, &pkt);
+//! let dir = flow.update(&Meta { ts: Timestamp::from_nanos(1_000_000_000), raw: &raw_syn }, &pkt);
+//!
+//! assert_eq!(dir, PacketDirection::Upwards);
+//! assert_eq!(flow.base.confidence, Confidence::High);
+//! assert_eq!(flow.base.metrics.u_pkts, 1);
+//! assert_eq!(flow.base.tcp.u_seq, 1000);
+//! ```
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
