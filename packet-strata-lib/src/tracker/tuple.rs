@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::packet::ether::EthAddr;
-use crate::packet::header::NetworkTunnelLayer;
+use crate::packet::header::{NetworkTunnelLayer, SourceDestLayer};
 use crate::packet::protocol::{EtherProto, IpProto};
 use crate::{
     packet::{
@@ -34,6 +34,9 @@ pub trait Tuple: Sized + Hash + Eq + Clone + Copy {
     /// Checks equality in a canonical (symmetric) way without creating a new instance.
     /// Used by `Symmetric` wrapper to ensure `Eq(A->B, B->A)`.
     fn eq_canonical(&self, other: &Self) -> bool;
+
+    /// Checks if the packet travels in the same direction (source -> dest) as this tuple.
+    fn is_same_dir(&self, pkt: &Packet<'_>) -> bool;
 
     /// Checks if the tuple is symmetric (source equals destination).
     ///
@@ -266,6 +269,18 @@ impl Tuple for TupleV4 {
 
         (s1 == o1 && s2 == o2) || (s1 == o2 && s2 == o1)
     }
+
+    #[inline(always)]
+    fn is_same_dir(&self, pkt: &Packet<'_>) -> bool {
+        pkt.network()
+            .and_then(|net| SourceDestLayer::<Ipv4Addr>::source(net))
+            .is_some_and(|src| src == self.src_ip)
+            && pkt
+                .transport()
+                .and_then(|tr| SourceDestLayer::<u16>::source(tr))
+                .unwrap_or(0)
+                == self.src_port
+    }
 }
 
 /// IPv6 5-tuple flow tuple with VNI support
@@ -409,6 +424,18 @@ impl Tuple for TupleV6 {
                 && self.src_port == other.dst_port
                 && self.dst_port == other.src_port)
     }
+
+    #[inline(always)]
+    fn is_same_dir(&self, pkt: &Packet<'_>) -> bool {
+        pkt.network()
+            .and_then(|net| SourceDestLayer::<Ipv6Addr>::source(net))
+            .is_some_and(|src| src == self.src_ip)
+            && pkt
+                .transport()
+                .and_then(|tr| SourceDestLayer::<u16>::source(tr))
+                .unwrap_or(0)
+                == self.src_port
+    }
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Copy, Clone, Serialize, Deserialize)]
@@ -515,5 +542,10 @@ impl Tuple for TupleEth {
 
         (self.src == other.src && self.dst == other.dst)
             || (self.src == other.dst && self.dst == other.src)
+    }
+
+    #[inline(always)]
+    fn is_same_dir(&self, pkt: &Packet<'_>) -> bool {
+        SourceDestLayer::<EthAddr>::source(pkt.link()).is_some_and(|src| src == self.src)
     }
 }

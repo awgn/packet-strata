@@ -2,7 +2,6 @@ use packet_strata::packet::header::{LinkLayer, NetworkLayer, TransportLayer, Tun
 use packet_strata::packet::iter::{Header, LinkType, PacketIter};
 use packet_strata::packet::tunnel::ipip::IpipType;
 use packet_strata::packet::{Packet, ParseMode};
-use packet_strata::tracker::direction::PacketDirection;
 use packet_strata::tracker::flow::Flow;
 use packet_strata::tracker::tuple::{Symmetric, TupleV4, TupleV6};
 
@@ -210,13 +209,11 @@ fn track_flow_v4<'a, Meta: PacketMetadata>(
         let flow = flow_tracker.v4.get_or_insert_with(
             &Symmetric(tuple),
             || -> Flow<TupleV4, ()> {
-                let dir = PacketDirection::infer(packet);
-                Flow::<TupleV4, ()>::new(meta.timestamp(), tuple, packet, dir)
+                Flow::<TupleV4, ()>::new(meta.timestamp(), tuple, packet, None)
             },
         );
 
-        let dir = flow.packet_dir(packet);
-        flow.process(meta, packet, dir);
+        flow.process(meta, packet, None);
     }
 }
 
@@ -230,13 +227,11 @@ fn track_flow_v6<'a, Meta: PacketMetadata>(
         let flow = flow_tracker.v6.get_or_insert_with(
             &Symmetric(tuple),
             || -> Flow<TupleV6, ()> {
-                let dir = PacketDirection::infer(packet);
-                Flow::<TupleV6, ()>::new(meta.timestamp(), tuple, packet, dir)
+                Flow::<TupleV6, ()>::new(meta.timestamp(), tuple, packet, None)
             },
         );
 
-        let dir = flow.packet_dir(packet);
-        flow.process(meta, packet, dir);
+        flow.process(meta, packet, None);
     }
 }
 

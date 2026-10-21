@@ -8,11 +8,12 @@ pub mod process;
 pub mod tuple;
 pub mod vni;
 
-/// Trait for types that have an intrinsic timestamp
+/// Trait for types that have intrinsic first-seen and last-seen timestamps
 pub trait Trackable {
     type Timestamp: PartialOrd + Clone;
-    fn timestamp(&self) -> Self::Timestamp;
-    fn set_timestamp(&mut self, ts: Self::Timestamp);
+    fn first_seen(&self) -> Self::Timestamp;
+    fn last_seen(&self) -> Self::Timestamp;
+    fn set_last_seen(&mut self, ts: Self::Timestamp);
 }
 
 /// Flow tracker for types that have an intrinsic timestamp (via Trackable trait)
@@ -104,10 +105,16 @@ where
         self.lru.remove(key)
     }
 
-    /// Get the timestamp of an entry
+    /// Get the first-seen timestamp of an entry
     #[inline]
-    pub fn get_timestamp(&self, key: &K) -> Option<V::Timestamp> {
-        self.lru.get(key).map(|v| v.timestamp())
+    pub fn get_first_seen(&self, key: &K) -> Option<V::Timestamp> {
+        self.lru.get(key).map(|v| v.first_seen())
+    }
+
+    /// Get the last-seen timestamp of an entry
+    #[inline]
+    pub fn get_last_seen(&self, key: &K) -> Option<V::Timestamp> {
+        self.lru.get(key).map(|v| v.last_seen())
     }
 
     /// Get a reference to the value
@@ -174,11 +181,15 @@ mod tests {
     impl Trackable for FlowData {
         type Timestamp = u64;
 
-        fn timestamp(&self) -> u64 {
+        fn first_seen(&self) -> u64 {
             self.timestamp
         }
 
-        fn set_timestamp(&mut self, ts: u64) {
+        fn last_seen(&self) -> u64 {
+            self.timestamp
+        }
+
+        fn set_last_seen(&mut self, ts: u64) {
             self.timestamp = ts;
         }
     }
@@ -315,7 +326,8 @@ mod tests {
         assert!(tracker.is_empty());
         assert_eq!(tracker.len(), 0);
         assert!(tracker.get(&1).is_none());
-        assert!(tracker.get_timestamp(&1).is_none());
+        assert!(tracker.get_first_seen(&1).is_none());
+        assert!(tracker.get_last_seen(&1).is_none());
     }
 
     #[test]

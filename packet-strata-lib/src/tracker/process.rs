@@ -15,13 +15,13 @@ pub trait Process {
     ///
     /// * `meta` - Packet metadata (timestamp, length, etc.)
     /// * `pkt` - The parsed packet
-    /// * `dir` - Direction of the packet relative to the flow
-    /// * `core` - Mutable reference to the flow's core statistics and metadata
+    /// * `dir` - Optional direction of the packet relative to the flow (provided by DPI or resolved by the flow)
+    /// * `base` - Mutable reference to the flow's core statistics and metadata
     fn process<Meta: PacketMetadata, T>(
         &mut self,
         meta: &Meta,
         pkt: &Packet<'_>,
-        dir: PacketDirection,
+        dir: Option<PacketDirection>,
         base: &mut FlowBase<T>,
     );
 }
@@ -32,7 +32,7 @@ impl Process for () {
         &mut self,
         _meta: &Meta,
         _pkt: &Packet<'_>,
-        _dir: PacketDirection,
+        _dir: Option<PacketDirection>,
         _base: &mut FlowBase<T>,
     ) {
     }
