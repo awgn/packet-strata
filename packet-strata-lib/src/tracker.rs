@@ -471,6 +471,11 @@ where
         vni_mapper: &mut VniMapper,
     ) -> Option<(&mut Flow<T, D>, PacketDirection)> {
         let tuple = T::from_packet(pkt, vni_mapper)?;
+        if let Some((icmp_err, inner_tuple)) = T::from_icmp_error(pkt, tuple.vni()) {
+            if let Some(target_flow) = self.lru.get_mut(&Symmetric(inner_tuple)) {
+                target_flow.base.ip.icmp_error = Some(icmp_err);
+            }
+        }
         let key = Symmetric(tuple.clone());
         let hash = self.lru.hasher().hash_one(&key);
         match self.lru.raw_entry_mut().from_key_hashed_nocheck(hash, &key) {
@@ -1165,5 +1170,51 @@ mod tests {
         assert_eq!(flow.base.metrics.d_pkts, 0);
         assert_eq!(flow.base.id.tuple.src_port, 50000);
         assert_eq!(flow.base.id.tuple.dst_port, 53);
+        assert_eq!(flow.base.ip.icmp_error, None);
+
+        // Now send an ICMP Destination Unreachable (type=3, code=3 Port Unreachable)
+        // from 1.1.1.1 -> 10.0.0.1 carrying the inner IPv4 header + first 8 bytes of UDP header
+        let inner_ip_and_l4 = &buf[14..14 + 20 + 8];
+        let icmp_total_len = (20 + 8 + inner_ip_and_l4.len()) as u16;
+        let mut icmp_buf = Vec::with_capacity(14 + icmp_total_len as usize);
+        icmp_buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x44, 0x55, 0x66]);
+        icmp_buf.extend_from_slice(&[0x00, 0x00, 0x0C, 0x11, 0x22, 0x33]);
+        icmp_buf.extend_from_slice(&[0x08, 0x00]);
+        icmp_buf.push(0x45);
+        icmp_buf.push(0x00);
+        icmp_buf.extend_from_slice(&icmp_total_len.to_be_bytes());
+        icmp_buf.extend_from_slice(&2u16.to_be_bytes());
+        icmp_buf.extend_from_slice(&0u16.to_be_bytes());
+        icmp_buf.push(64);
+        icmp_buf.push(1); // ICMP
+        icmp_buf.extend_from_slice(&[0x00, 0x00]);
+        icmp_buf.extend_from_slice(&[1, 1, 1, 1]);
+        icmp_buf.extend_from_slice(&[10, 0, 0, 1]);
+        // ICMP header (8 bytes): Type=3 (Dest Unreach), Code=3 (Port Unreach), Checksum=0, Unused=0
+        icmp_buf.extend_from_slice(&[3, 3, 0, 0, 0, 0, 0, 0]);
+        icmp_buf.extend_from_slice(inner_ip_and_l4);
+
+        let icmp_pkt =
+            Packet::from_bytes(&icmp_buf, LinkType::Ethernet, ParseMode::Innermost).unwrap();
+        let icmp_meta = DummyMeta {
+            ts: Timestamp::from_nanos(2_000),
+            raw: &icmp_buf,
+        };
+
+        tracker
+            .track_packet(&icmp_meta, &icmp_pkt, &mut vni_mapper)
+            .unwrap();
+
+        // Verify the original UDP flow has its `ip.icmp_error` populated and its `timing.last` unchanged
+        let udp_tuple = TupleV4::new(&pkt, &mut vni_mapper).unwrap();
+        let udp_flow = tracker.get(&Symmetric(udp_tuple)).unwrap();
+        assert_eq!(
+            udp_flow.base.ip.icmp_error,
+            Some(crate::tracker::flow::IcmpError::V4 {
+                icmp_type: 3,
+                code: 3
+            })
+        );
+        assert_eq!(udp_flow.base.timing.last, Timestamp::from_nanos(1_000));
     }
 }

@@ -148,6 +148,26 @@ pub struct FlowTiming {
     pub last: Timestamp,
 }
 
+/// ICMP/ICMPv6 error message correlated to a flow via the inner IP/L4 header in the ICMP payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IcmpError {
+    /// ICMPv4 error message (`icmp_type`, `code`).
+    V4 { icmp_type: u8, code: u8 },
+    /// ICMPv6 error message (`icmp_type`, `code`).
+    V6 { icmp_type: u8, code: u8 },
+}
+
+impl IcmpError {
+    /// Returns the `(icmp_type, code)` pair regardless of IP version.
+    #[inline(always)]
+    pub const fn into_parts(self) -> (u8, u8) {
+        match self {
+            Self::V4 { icmp_type, code } | Self::V6 { icmp_type, code } => (icmp_type, code),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct IpState {
     /// Uplink IP identification.
@@ -158,6 +178,9 @@ pub struct IpState {
     pub u_lost: u32,
     /// Downlink packets lost.
     pub d_lost: u32,
+    /// Last ICMP/ICMPv6 error message correlated to this flow (if any).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub icmp_error: Option<IcmpError>,
 }
 
 impl IpState {

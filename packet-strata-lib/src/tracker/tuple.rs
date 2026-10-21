@@ -57,9 +57,14 @@ use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+use crate::packet::detect::find_ipv6_upper_protocol;
 use crate::packet::ether::EthAddr;
-use crate::packet::header::{NetworkTunnelLayer, SourceDestLayer};
+use crate::packet::header::{NetworkTunnelLayer, SourceDestLayer, TransportLayer};
+use crate::packet::ipv4::Ipv4Header;
+use crate::packet::ipv6::Ipv6Header;
 use crate::packet::protocol::{EtherProto, IpProto};
+use crate::packet::HeaderParser;
+use crate::tracker::flow::IcmpError;
 use crate::{
     packet::{
         header::{LinkLayer, NetworkLayer},
@@ -77,6 +82,15 @@ pub trait Tuple: Sized + Hash + Eq + Clone + Copy {
 
     /// Create a new flow tuple from a packet
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self>;
+
+    /// If `pkt` is an ICMP/ICMPv6 error message carrying an inner IP + L4 header
+    /// (`TCP`, `UDP`, or `SCTP`), extracts the [`IcmpError`] and the inner flow tuple
+    /// of the offending packet using `vni`.
+    #[inline(always)]
+    fn from_icmp_error(pkt: &Packet<'_>, vni: VniId) -> Option<(IcmpError, Self)> {
+        let _ = (pkt, vni);
+        None
+    }
 
     /// Flip the source and destination fields of the flow tuple
     fn flip(&self) -> Self;
@@ -248,6 +262,39 @@ impl TupleV4 {
             vni,
         })
     }
+
+    #[cold]
+    #[inline(never)]
+    fn parse_icmp_error_payload(
+        icmp_type: u8,
+        code: u8,
+        payload: &[u8],
+        vni: VniId,
+    ) -> Option<(IcmpError, Self)> {
+        let (ipv4, l4_bytes) = Ipv4Header::from_bytes(payload).ok()?;
+        if l4_bytes.len() < 4 {
+            return None;
+        }
+        let protocol = ipv4.header.protocol();
+        match protocol {
+            IpProto::TCP | IpProto::UDP | IpProto::SCTP => {
+                let src_port = u16::from_be_bytes([l4_bytes[0], l4_bytes[1]]);
+                let dst_port = u16::from_be_bytes([l4_bytes[2], l4_bytes[3]]);
+                Some((
+                    IcmpError::V4 { icmp_type, code },
+                    Self {
+                        src_ip: ipv4.header.src_ip(),
+                        dst_ip: ipv4.header.dst_ip(),
+                        src_port,
+                        dst_port,
+                        protocol,
+                        vni,
+                    },
+                ))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Tuple for TupleV4 {
@@ -286,6 +333,21 @@ impl Tuple for TupleV4 {
     #[inline(always)]
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
         Self::new(pkt, vni_mapper)
+    }
+
+    #[inline(always)]
+    fn from_icmp_error(pkt: &Packet<'_>, vni: VniId) -> Option<(IcmpError, Self)> {
+        if let Some(TransportLayer::Icmp(icmp)) = pkt.transport() {
+            if icmp.icmp_type().is_error() {
+                return Self::parse_icmp_error_payload(
+                    icmp.icmp_type().0,
+                    icmp.code(),
+                    pkt.data(),
+                    vni,
+                );
+            }
+        }
+        None
     }
 
     #[inline(always)]
@@ -394,6 +456,39 @@ impl TupleV6 {
             vni,
         })
     }
+
+    #[cold]
+    #[inline(never)]
+    fn parse_icmp6_error_payload(
+        icmp_type: u8,
+        code: u8,
+        payload: &[u8],
+        vni: VniId,
+    ) -> Option<(IcmpError, Self)> {
+        let (ipv6, l4_bytes) = Ipv6Header::from_bytes(payload).ok()?;
+        if l4_bytes.len() < 4 {
+            return None;
+        }
+        let protocol = find_ipv6_upper_protocol(&ipv6);
+        match protocol {
+            IpProto::TCP | IpProto::UDP | IpProto::SCTP => {
+                let src_port = u16::from_be_bytes([l4_bytes[0], l4_bytes[1]]);
+                let dst_port = u16::from_be_bytes([l4_bytes[2], l4_bytes[3]]);
+                Some((
+                    IcmpError::V6 { icmp_type, code },
+                    Self {
+                        src_ip: ipv6.header.src_ip(),
+                        dst_ip: ipv6.header.dst_ip(),
+                        src_port,
+                        dst_port,
+                        protocol,
+                        vni,
+                    },
+                ))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Tuple for TupleV6 {
@@ -432,6 +527,21 @@ impl Tuple for TupleV6 {
     #[inline(always)]
     fn from_packet(pkt: &Packet<'_>, vni_mapper: &mut VniMapper) -> Option<Self> {
         Self::new(pkt, vni_mapper)
+    }
+
+    #[inline(always)]
+    fn from_icmp_error(pkt: &Packet<'_>, vni: VniId) -> Option<(IcmpError, Self)> {
+        if let Some(TransportLayer::Icmp6(icmp6)) = pkt.transport() {
+            if icmp6.icmp6_type().is_error() {
+                return Self::parse_icmp6_error_payload(
+                    icmp6.icmp6_type().0,
+                    icmp6.code(),
+                    pkt.data(),
+                    vni,
+                );
+            }
+        }
+        None
     }
 
     #[inline(always)]

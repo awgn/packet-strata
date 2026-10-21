@@ -113,6 +113,19 @@ impl IcmpType {
     pub const ADDRESS_REPLY: IcmpType = IcmpType(18); // Address Mask Reply
     pub const EX_ECHO: IcmpType = IcmpType(42); // Extended Echo Request
     pub const EX_ECHO_REPLY: IcmpType = IcmpType(43); // Extended Echo Reply
+
+    /// Returns `true` if this ICMP message is an error message carrying an inner IPv4 header + L4 prefix.
+    #[inline(always)]
+    pub const fn is_error(self) -> bool {
+        matches!(
+            self,
+            Self::DEST_UNREACH
+                | Self::SOURCE_QUENCH
+                | Self::REDIRECT
+                | Self::TIME_EXCEEDED
+                | Self::PARAMETER_PROBLEM
+        )
+    }
 }
 
 impl From<u8> for IcmpType {

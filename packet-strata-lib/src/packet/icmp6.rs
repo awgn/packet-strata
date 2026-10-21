@@ -136,6 +136,18 @@ impl Icmp6Type {
     pub const MPL_CONTROL_MESSAGE: Icmp6Type = Icmp6Type(159);
     pub const EXTENDED_ECHO_REQUEST: Icmp6Type = Icmp6Type(160);
     pub const EXTENDED_ECHO_REPLY: Icmp6Type = Icmp6Type(161);
+
+    /// Returns `true` if this ICMPv6 message is an error message carrying an inner IPv6 header + L4 prefix.
+    #[inline(always)]
+    pub const fn is_error(self) -> bool {
+        matches!(
+            self,
+            Self::DST_UNREACH
+                | Self::PACKET_TOO_BIG
+                | Self::TIME_EXCEEDED
+                | Self::PARAM_PROB
+        )
+    }
 }
 
 impl From<u8> for Icmp6Type {
