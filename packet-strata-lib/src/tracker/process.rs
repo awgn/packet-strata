@@ -4,24 +4,25 @@ use crate::{
     tracker::{direction::PacketDirection, flow::FlowBase},
 };
 
-/// A trait for types that can process a packet and update their state.
+/// A trait for custom per-flow data (`D` in `Flow<T, D>`) that processes a packet
+/// during Phase 2 (after `Flow::update` has updated L3/L4 flow state and counters).
 ///
-/// This is primarily used by `Flow` to update statistics (counters, timestamps)
-/// and protocol-specific state machines (like TCP) upon receiving a new packet.
+/// If the custom DPI / analyzer determines that the flow orientation should be swapped,
+/// it can call `base.flip_direction()`.
 pub trait Process {
-    /// Update the state based on the provided packet metadata and content.
+    /// Update custom state based on the provided packet metadata and content.
     ///
     /// # Arguments
     ///
     /// * `meta` - Packet metadata (timestamp, length, etc.)
     /// * `pkt` - The parsed packet
-    /// * `dir` - Optional direction of the packet relative to the flow (provided by DPI or resolved by the flow)
+    /// * `dir` - Direction of the packet relative to the flow (computed in Phase 1)
     /// * `base` - Mutable reference to the flow's core statistics and metadata
     fn process<Meta: PacketMetadata, T>(
         &mut self,
         meta: &Meta,
         pkt: &Packet<'_>,
-        dir: Option<PacketDirection>,
+        dir: PacketDirection,
         base: &mut FlowBase<T>,
     );
 }
@@ -32,7 +33,7 @@ impl Process for () {
         &mut self,
         _meta: &Meta,
         _pkt: &Packet<'_>,
-        _dir: Option<PacketDirection>,
+        _dir: PacketDirection,
         _base: &mut FlowBase<T>,
     ) {
     }

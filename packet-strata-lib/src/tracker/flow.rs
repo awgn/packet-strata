@@ -313,7 +313,12 @@ pub struct FlowBase<T> {
 }
 
 impl<T: Tuple> FlowBase<T> {
-    /// Flips the canonical orientation of the flow in-place and swaps uplink/downlink statistics.
+    /// Flips the canonical orientation of the flow in-place, swaps all uplink/downlink
+    /// statistics (including bytes and packets already counted), and upgrades `confidence`
+    /// to `Confidence::High`.
+    ///
+    /// Can be called during Phase 2 by an external DPI engine whenever it determines
+    /// that the initial flow direction was inverted.
     #[cold]
     #[inline(never)]
     pub fn flip_direction(&mut self) {
@@ -322,24 +327,7 @@ impl<T: Tuple> FlowBase<T> {
         self.ip.swap_directions();
         self.tcp.swap_directions();
         self.metrics.swap_directions();
-    }
-
-    /// Confirms or corrects the flow orientation based on an authoritative packet direction
-    /// (e.g. from an external DPI engine or a subsequent L4 handshake packet).
-    ///
-    /// If `actual_pkt_dir != tuple_dir` (and the tuple is not symmetric), flips the flow
-    /// and all accumulated counters in-place, then sets `self.confidence = Confidence::High`.
-    #[inline]
-    pub fn confirm_direction(
-        &mut self,
-        tuple_dir: PacketDirection,
-        actual_pkt_dir: PacketDirection,
-    ) -> PacketDirection {
-        if !self.id.tuple.is_symmetric() && actual_pkt_dir != tuple_dir {
-            self.flip_direction();
-        }
         self.confidence = Confidence::High;
-        actual_pkt_dir
     }
 
     #[cold]
@@ -355,7 +343,12 @@ impl<T: Tuple> FlowBase<T> {
         }
 
         if let Some(l4_dir) = PacketDirection::infer_l4_handshake(pkt) {
-            return self.confirm_direction(tuple_dir, l4_dir);
+            if !self.id.tuple.is_symmetric() && l4_dir != tuple_dir {
+                self.flip_direction();
+            } else {
+                self.confidence = Confidence::High;
+            }
+            return l4_dir;
         }
 
         if total_pkts >= 7 || (self.metrics.u_payload_pkts > 0 && self.metrics.d_payload_pkts > 0)
@@ -379,31 +372,29 @@ where
     T: Default + Clone + Tuple + Sized,
     D: Default,
 {
-    /// Creates a new `Flow` instance.
+    /// Creates a new `Flow` instance (Phase 1 initialization).
     ///
-    /// If `dir` is `Some(d)` (provided by an external DPI engine), the flow is oriented
-    /// according to `d` with `Confidence::High`.
-    /// If `dir` is `None`, the initial orientation and `Confidence` (`High` or `Low`) are
-    /// inferred automatically from L4 headers and OS-aware port ranking.
+    /// Automatically infers the initial flow orientation (`Upwards` or `Downwards`)
+    /// and its `Confidence` (`High` or `Low`) from L4 headers and OS-aware port ranking.
     #[inline(always)]
-    pub fn new(
+    pub fn new(timestamp: Timestamp, tuple: T, pkt: &Packet<'_>) -> Self {
+        Self::new_with_dir(timestamp, tuple, pkt).0
+    }
+
+    /// Creates a new `Flow` instance and also returns the inferred direction of the initial packet.
+    #[inline(always)]
+    pub(crate) fn new_with_dir(
         timestamp: Timestamp,
         tuple: T,
         pkt: &Packet<'_>,
-        dir: Option<PacketDirection>,
-    ) -> Self {
-        let (resolved_dir, confidence) = match dir {
-            Some(d) => (d, Confidence::High),
-            None => {
-                if tuple.is_symmetric() {
-                    (PacketDirection::infer_symmetric(pkt), Confidence::High)
-                } else {
-                    PacketDirection::infer_with_confidence(pkt)
-                }
-            }
+    ) -> (Self, PacketDirection) {
+        let (dir, confidence) = if tuple.is_symmetric() {
+            (PacketDirection::infer_symmetric(pkt), Confidence::High)
+        } else {
+            PacketDirection::infer_with_confidence(pkt)
         };
-        let upwards = matches!(resolved_dir, PacketDirection::Upwards);
-        Self {
+        let upwards = matches!(dir, PacketDirection::Upwards);
+        let flow = Self {
             base: FlowBase {
                 id: FlowId {
                     tuple: if upwards { tuple } else { tuple.flip() },
@@ -427,7 +418,11 @@ where
                 ..Default::default()
             },
             data: Default::default(),
-        }
+        };
+        // Note: relative to the newly oriented `flow.base.id.tuple` (which was flipped if `dir` was Downwards),
+        // the initial packet itself travels from `id.tuple.source -> id.tuple.dest` (`Upwards`) when `upwards` is true,
+        // and from `id.tuple.dest -> id.tuple.source` (`Downwards`) when `upwards` is false — which is `dir`!
+        (flow, dir)
     }
 }
 
@@ -445,6 +440,16 @@ impl<T: Tuple, D> Flow<T, D> {
             PacketDirection::Downwards
         }
     }
+
+    /// Flips the canonical orientation of the flow in-place, swaps all uplink/downlink
+    /// statistics (including bytes and packets already counted), and upgrades `confidence`
+    /// to `Confidence::High`.
+    ///
+    /// Call this in Phase 2 if your DPI engine determines that the flow orientation should be swapped.
+    #[inline]
+    pub fn flip_direction(&mut self) {
+        self.base.flip_direction();
+    }
 }
 
 impl<T, D> Flow<T, D>
@@ -452,42 +457,42 @@ where
     T: Tuple,
     D: Process,
 {
-    /// Processes a packet and updates flow statistics.
+    /// Updates the flow with a new packet (Phase 1) and invokes `self.data.process` (Phase 2).
     ///
-    /// `dir` is the optional packet direction provided by an external DPI engine:
-    /// - When `dir` is `Some(dpi_dir)`, if the flow's orientation conflicts with `dpi_dir`,
-    ///   the flow is automatically flipped in-place (swapping tuple, MACs, and accumulated
-    ///   uplink/downlink counters) and `confidence` is set to `Confidence::High`.
-    /// - When `dir` is `None`, the direction is computed from the flow's tuple (and if
-    ///   `confidence == Confidence::Low`, checked against definitive L4 handshake signals).
+    /// Returns the `PacketDirection` assigned to `pkt` during Phase 1.
+    /// If external DPI logic running after `flow.update(meta, pkt)` determines that the flow
+    /// direction should be swapped, it can simply call `flow.flip_direction()`.
     #[inline(always)]
-    pub fn process<Meta: PacketMetadata>(
+    pub fn update<Meta: PacketMetadata>(
         &mut self,
         meta: &Meta,
         pkt: &Packet<'_>,
-        dir: Option<PacketDirection>,
-    ) {
+    ) -> PacketDirection {
         let tuple_dir = self.packet_dir(pkt);
-        let resolved_dir = match dir {
-            Some(dpi_dir) => self.base.confirm_direction(tuple_dir, dpi_dir),
-            None => {
-                if self.base.confidence == Confidence::Low {
-                    self.base.resolve_l4_direction(pkt, tuple_dir)
-                } else {
-                    tuple_dir
-                }
-            }
+        let dir = if self.base.confidence == Confidence::Low {
+            self.base.resolve_l4_direction(pkt, tuple_dir)
+        } else {
+            tuple_dir
         };
+        self.update_with_dir(meta, pkt, dir)
+    }
 
+    /// Updates the flow using an already-known packet direction (used on the 1st packet in `track_packet`
+    /// to avoid re-evaluating `packet_dir` and `resolve_l4_direction`).
+    #[inline(always)]
+    pub(crate) fn update_with_dir<Meta: PacketMetadata>(
+        &mut self,
+        meta: &Meta,
+        pkt: &Packet<'_>,
+        dir: PacketDirection,
+    ) -> PacketDirection {
         let ts = meta.timestamp();
         self.base.timing.last = ts;
-        self.base.metrics.update(pkt, resolved_dir, meta);
-        self.base.ip.update(pkt, resolved_dir);
-        self.base
-            .tcp
-            .update_with_ts(pkt, resolved_dir, ts, &self.base.metrics);
-        self.data
-            .process(meta, pkt, Some(resolved_dir), &mut self.base);
+        self.base.metrics.update(pkt, dir, meta);
+        self.base.ip.update(pkt, dir);
+        self.base.tcp.update_with_ts(pkt, dir, ts, &self.base.metrics);
+        self.data.process(meta, pkt, dir, &mut self.base);
+        dir
     }
 }
 
@@ -576,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flow_multi_packet_direction_refinement_via_optional_dpi_dir() {
+    fn test_two_phase_update_and_dpi_flip_direction() {
         let mut vni = VniMapper::default();
         let clt_ip = [10, 0, 0, 1];
         let srv_ip = [10, 0, 0, 2];
@@ -585,62 +590,68 @@ mod tests {
         let srv_port = 55000u16;
 
         // Packet 1: Mid-stream empty ACK from Server (55000) -> Client (50000).
-        // DPI passes `None` (no payload yet). Stateless L4 guesses Upwards (55000 > 50000) with Confidence::Low.
+        // Phase 1 (`Flow::new` + `flow.update`) guesses Upwards (55000 > 50000) with Confidence::Low.
         let raw1 = build_tcp_ipv4(srv_ip, clt_ip, srv_port, clt_port, 0x10, &[]);
         let pkt1 = Packet::from_bytes(&raw1, LinkType::Ethernet, ParseMode::Outermost).unwrap();
         let tuple1 = TupleV4::new(&pkt1, &mut vni).unwrap();
 
-        let mut flow: FlowIpV4<()> = Flow::new(Timestamp(100), tuple1, &pkt1, None);
+        let mut flow: FlowIpV4<()> = Flow::new(Timestamp(100), tuple1, &pkt1);
         assert_eq!(flow.base.confidence, Confidence::Low);
 
-        flow.process(
+        let d1 = flow.update(
             &DummyMeta {
                 ts: Timestamp(100),
                 raw: &raw1,
             },
             &pkt1,
-            None,
         );
+        assert_eq!(d1, PacketDirection::Upwards);
         assert_eq!(flow.base.metrics.u_pkts, 1);
         assert_eq!(flow.base.metrics.d_pkts, 0);
 
-        // Packet 2: Empty ACK from Client (50000) -> Server (55000). DPI still passes `None`.
+        // Packet 2: Empty ACK from Client (50000) -> Server (55000).
         let raw2 = build_tcp_ipv4(clt_ip, srv_ip, clt_port, srv_port, 0x10, &[]);
         let pkt2 = Packet::from_bytes(&raw2, LinkType::Ethernet, ParseMode::Outermost).unwrap();
-        flow.process(
+        let d2 = flow.update(
             &DummyMeta {
                 ts: Timestamp(101),
                 raw: &raw2,
             },
             &pkt2,
-            None,
         );
+        assert_eq!(d2, PacketDirection::Downwards);
         assert_eq!(flow.base.confidence, Confidence::Low);
         assert_eq!(flow.base.metrics.u_pkts, 1);
         assert_eq!(flow.base.metrics.d_pkts, 1);
 
-        // Packet 3: Client (50000) -> Server (55000) sends L7 request!
-        // The external DPI engine identifies the packet as `Some(PacketDirection::Upwards)` and passes it to `flow.process`.
-        // `Flow` sees that `Upwards` conflicts with the provisional tuple orientation (`Downwards`),
-        // automatically flips the flow in-place, swaps the accumulated counters, and upgrades to `Confidence::High`!
+        // Packet 3: Client (50000) -> Server (55000) sends HTTP GET request!
+        // Phase 1 (`flow.update`) provisionally counts it as `Downwards` (`d_pkts` becomes 2, `d_payload_pkts` becomes 1).
         let raw3 = build_tcp_ipv4(
             clt_ip,
             srv_ip,
             clt_port,
             srv_port,
             0x18,
-            b"GET /index.html HTTP/1.1\r\n",
+            b"GET /index.html HTTP/1.1
+",
         );
         let pkt3 = Packet::from_bytes(&raw3, LinkType::Ethernet, ParseMode::Outermost).unwrap();
-        flow.process(
+        let d3 = flow.update(
             &DummyMeta {
                 ts: Timestamp(102),
                 raw: &raw3,
             },
             &pkt3,
-            Some(PacketDirection::Upwards),
         );
+        assert_eq!(d3, PacketDirection::Downwards);
 
+        // Phase 2: User's DPI inspects `pkt3`, sees it's an HTTP GET request (which must be `Upwards`),
+        // notices `d3 != PacketDirection::Upwards`, and calls `flow.flip_direction()`!
+        if d3 != PacketDirection::Upwards {
+            flow.flip_direction();
+        }
+
+        // Now the flow tuple, MACs, and ALL accumulated counters (including Packet 3!) are flipped and High confidence!
         assert_eq!(flow.base.confidence, Confidence::High);
         assert_eq!(flow.base.id.tuple.source_port(), clt_port);
         assert_eq!(flow.base.id.tuple.dest_port(), srv_port);
@@ -651,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flow_l4_handshake_refinement_when_dpi_is_none() {
+    fn test_flow_l4_handshake_refinement() {
         let mut vni = VniMapper::default();
         let clt_ip = [10, 0, 0, 1];
         let srv_ip = [10, 0, 0, 2];
@@ -662,29 +673,28 @@ mod tests {
         let raw1 = build_tcp_ipv4(srv_ip, clt_ip, srv_port, clt_port, 0x10, &[]);
         let pkt1 = Packet::from_bytes(&raw1, LinkType::Ethernet, ParseMode::Outermost).unwrap();
         let tuple1 = TupleV4::new(&pkt1, &mut vni).unwrap();
-        let mut flow: FlowIpV4<()> = Flow::new(Timestamp(100), tuple1, &pkt1, None);
-        flow.process(
+        let mut flow: FlowIpV4<()> = Flow::new(Timestamp(100), tuple1, &pkt1);
+        flow.update(
             &DummyMeta {
                 ts: Timestamp(100),
                 raw: &raw1,
             },
             &pkt1,
-            None,
         );
         assert_eq!(flow.base.confidence, Confidence::Low);
 
-        // Packet 2: Retransmitted SYN-ACK (0x12) from Server (55000) -> Client (50000) with `dir = None`.
-        // Pure L4 handshake detection recognizes SYN-ACK as `Downwards`, flips the flow, and sets `Confidence::High`!
+        // Packet 2: Retransmitted SYN-ACK (0x12) from Server (55000) -> Client (50000).
+        // Phase 1 pure L4 handshake detection recognizes SYN-ACK as `Downwards`, flips the flow, and sets `Confidence::High`!
         let raw2 = build_tcp_ipv4(srv_ip, clt_ip, srv_port, clt_port, 0x12, &[]);
         let pkt2 = Packet::from_bytes(&raw2, LinkType::Ethernet, ParseMode::Outermost).unwrap();
-        flow.process(
+        let d2 = flow.update(
             &DummyMeta {
                 ts: Timestamp(101),
                 raw: &raw2,
             },
             &pkt2,
-            None,
         );
+        assert_eq!(d2, PacketDirection::Downwards);
         assert_eq!(flow.base.confidence, Confidence::High);
         assert_eq!(flow.base.id.tuple.source_port(), clt_port);
         assert_eq!(flow.base.id.tuple.dest_port(), srv_port);

@@ -1,10 +1,5 @@
 use clap::Parser;
-use packet_strata::tracker::{
-    flow::Flow,
-    tuple::{Symmetric, TupleV4, TupleV6},
-    vni::VniMapper,
-    Tracker,
-};
+use packet_strata::tracker::{vni::VniMapper, FlowTrackerV4, FlowTrackerV6};
 use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::*;
 use std::fs::File;
@@ -80,16 +75,16 @@ fn main() {
 }
 
 struct FlowTracker {
-    v4: Tracker<Symmetric<TupleV4>, Flow<TupleV4, ()>>,
-    v6: Tracker<Symmetric<TupleV6>, Flow<TupleV6, ()>>,
+    v4: FlowTrackerV4,
+    v6: FlowTrackerV6,
     vni_mapper: VniMapper,
 }
 
 impl FlowTracker {
     fn new() -> Self {
         Self {
-            v4: Tracker::with_capacity(100000),
-            v6: Tracker::with_capacity(100000),
+            v4: FlowTrackerV4::with_capacity(100000),
+            v6: FlowTrackerV6::with_capacity(100000),
             vni_mapper: VniMapper::new(),
         }
     }

@@ -2,11 +2,32 @@ use ahash::RandomState;
 use hashlink::linked_hash_map::RawEntryMut;
 use hashlink::LinkedHashMap;
 
+use crate::{
+    metadata::PacketMetadata,
+    packet::Packet,
+    tracker::{
+        direction::PacketDirection,
+        flow::{Flow, FlowEth, FlowIpV4, FlowIpV6},
+        process::Process,
+        tuple::{Symmetric, Tuple, TupleEth, TupleV4, TupleV6},
+        vni::VniMapper,
+    },
+};
+
 pub mod direction;
 pub mod flow;
 pub mod process;
 pub mod tuple;
 pub mod vni;
+
+/// Type alias for a symmetric IPv4 flow tracker.
+pub type FlowTrackerV4<D = ()> = Tracker<Symmetric<TupleV4>, FlowIpV4<D>>;
+
+/// Type alias for a symmetric IPv6 flow tracker.
+pub type FlowTrackerV6<D = ()> = Tracker<Symmetric<TupleV6>, FlowIpV6<D>>;
+
+/// Type alias for a symmetric Ethernet (L2) flow tracker.
+pub type FlowTrackerEth<D = ()> = Tracker<Symmetric<TupleEth>, FlowEth<D>>;
 
 /// Trait for types that have intrinsic first-seen and last-seen timestamps
 pub trait Trackable {
@@ -19,6 +40,17 @@ pub trait Trackable {
 /// Flow tracker for types that have an intrinsic timestamp (via Trackable trait)
 pub struct Tracker<K, V: Trackable> {
     lru: LinkedHashMap<K, V, RandomState>,
+}
+
+impl<K, V> Default for Tracker<K, V>
+where
+    K: Eq + std::hash::Hash + Clone,
+    V: Trackable,
+{
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<K, V> Tracker<K, V>
@@ -71,6 +103,43 @@ where
                 }
                 _ => break,
             }
+        }
+        evicted
+    }
+
+    /// Evicts all entries from the front (oldest) whose `last_seen() <= max_last_seen`,
+    /// passing ownership of each evicted `(K, V)` pair to `on_evict`.
+    ///
+    /// Stops at the first entry with `last_seen() > max_last_seen` since entries are
+    /// ordered by last-seen timestamp in the LRU queue.
+    pub fn evict_expired<F>(&mut self, max_last_seen: V::Timestamp, mut on_evict: F) -> usize
+    where
+        F: FnMut(K, V),
+    {
+        let mut evicted = 0;
+        while let Some((_, v)) = self.lru.front() {
+            if v.last_seen() <= max_last_seen {
+                if let Some((k, v)) = self.lru.pop_front() {
+                    on_evict(k, v);
+                    evicted += 1;
+                }
+            } else {
+                break;
+            }
+        }
+        evicted
+    }
+
+    /// Drains and evicts all remaining entries in LRU order (from oldest to newest),
+    /// passing ownership of each `(K, V)` pair to `on_evict`.
+    pub fn drain_all<F>(&mut self, mut on_evict: F) -> usize
+    where
+        F: FnMut(K, V),
+    {
+        let mut evicted = 0;
+        while let Some((k, v)) = self.lru.pop_front() {
+            on_evict(k, v);
+            evicted += 1;
         }
         evicted
     }
@@ -164,6 +233,47 @@ where
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.lru.is_empty()
+    }
+}
+
+impl<T, D> Tracker<Symmetric<T>, Flow<T, D>>
+where
+    T: Tuple + Default + Clone + Sized,
+    Symmetric<T>: Eq + std::hash::Hash + Clone,
+    D: Default + Process,
+{
+    /// Extracts the tuple from `pkt`, looks up or creates the corresponding `Flow<T, D>`
+    /// (Phase 1), updates its counters and invokes `D::process` (Phase 2), and returns
+    /// a mutable reference to the flow along with the packet's `PacketDirection`.
+    ///
+    /// On the first packet of a flow, direction inference is computed only once and reused
+    /// for both flow creation and metric updates.
+    ///
+    /// Returns `None` if `pkt` does not match the tuple's layer (e.g. non-IPv4 packet on `FlowTrackerV4`).
+    #[inline(always)]
+    pub fn track_packet<Meta: PacketMetadata>(
+        &mut self,
+        meta: &Meta,
+        pkt: &Packet<'_>,
+        vni_mapper: &mut VniMapper,
+    ) -> Option<(&mut Flow<T, D>, PacketDirection)> {
+        let tuple = T::from_packet(pkt, vni_mapper)?;
+        let key = Symmetric(tuple.clone());
+        let hash = self.lru.hasher().hash_one(&key);
+        match self.lru.raw_entry_mut().from_key_hashed_nocheck(hash, &key) {
+            RawEntryMut::Occupied(mut occupied) => {
+                occupied.to_back();
+                let flow = occupied.into_mut();
+                let dir = flow.update(meta, pkt);
+                Some((flow, dir))
+            }
+            RawEntryMut::Vacant(vacant) => {
+                let (new_flow, initial_dir) = Flow::new_with_dir(meta.timestamp(), tuple, pkt);
+                let flow = vacant.insert_hashed_nocheck(hash, key, new_flow).1;
+                let dir = flow.update_with_dir(meta, pkt, initial_dir);
+                Some((flow, dir))
+            }
+        }
     }
 }
 
@@ -677,5 +787,104 @@ mod tests {
         assert_eq!(evicted[0].0, 1);
         assert_eq!(evicted[1].0, 2);
         assert_eq!(tracker.len(), 2);
+    }
+
+    #[test]
+    fn test_evict_expired_and_drain_all() {
+        let mut tracker = Tracker::<i32, FlowData>::with_capacity(10);
+
+        tracker.get_or_insert_with(&1, || FlowData {
+            timestamp: 100,
+            bytes: 1000,
+            packets: 10,
+        });
+        tracker.get_or_insert_with(&2, || FlowData {
+            timestamp: 200,
+            bytes: 2000,
+            packets: 20,
+        });
+        tracker.get_or_insert_with(&3, || FlowData {
+            timestamp: 300,
+            bytes: 3000,
+            packets: 30,
+        });
+
+        let mut expired = Vec::new();
+        let count = tracker.evict_expired(200, |k, v| {
+            expired.push((k, v.bytes));
+        });
+        assert_eq!(count, 2);
+        assert_eq!(expired, vec![(1, 1000), (2, 2000)]);
+        assert_eq!(tracker.len(), 1);
+
+        let mut remaining = Vec::new();
+        let drained = tracker.drain_all(|k, v| {
+            remaining.push((k, v.bytes));
+        });
+        assert_eq!(drained, 1);
+        assert_eq!(remaining, vec![(3, 3000)]);
+        assert!(tracker.is_empty());
+    }
+
+    #[test]
+    fn test_flow_tracker_v4_track_packet() {
+        use crate::packet::{iter::LinkType, Packet, ParseMode};
+        use crate::timestamp::Timestamp;
+
+        struct DummyMeta<'a> {
+            ts: Timestamp,
+            raw: &'a [u8],
+        }
+        impl PacketMetadata for DummyMeta<'_> {
+            fn timestamp(&self) -> Timestamp {
+                self.ts
+            }
+            fn caplen(&self) -> u32 {
+                self.raw.len() as u32
+            }
+            fn origlen(&self) -> u32 {
+                self.raw.len() as u32
+            }
+            fn data(&self) -> &[u8] {
+                self.raw
+            }
+        }
+
+        // Build minimal Ethernet + IPv4 + UDP packet (10.0.0.1:50000 -> 1.1.1.1:53)
+        let mut buf = Vec::with_capacity(14 + 20 + 8 + 4);
+        buf.extend_from_slice(&[0x00, 0x00, 0x0C, 0x11, 0x22, 0x33]);
+        buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x44, 0x55, 0x66]);
+        buf.extend_from_slice(&[0x08, 0x00]);
+        buf.push(0x45);
+        buf.push(0x00);
+        buf.extend_from_slice(&32u16.to_be_bytes());
+        buf.extend_from_slice(&1u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.push(64);
+        buf.push(17); // UDP
+        buf.extend_from_slice(&[0x00, 0x00]);
+        buf.extend_from_slice(&[10, 0, 0, 1]);
+        buf.extend_from_slice(&[1, 1, 1, 1]);
+        buf.extend_from_slice(&50000u16.to_be_bytes());
+        buf.extend_from_slice(&53u16.to_be_bytes());
+        buf.extend_from_slice(&12u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(b"ping");
+
+        let pkt = Packet::from_bytes(&buf, LinkType::Ethernet, ParseMode::Innermost).unwrap();
+        let meta = DummyMeta {
+            ts: Timestamp::from_nanos(1_000),
+            raw: &buf,
+        };
+
+        let mut tracker: FlowTrackerV4 = FlowTrackerV4::with_capacity(16);
+        let mut vni_mapper = VniMapper::new();
+
+        let (flow, dir) = tracker.track_packet(&meta, &pkt, &mut vni_mapper).unwrap();
+        assert_eq!(dir, PacketDirection::Upwards);
+        assert_eq!(flow.base.metrics.u_pkts, 1);
+        assert_eq!(flow.base.metrics.d_pkts, 0);
+        assert_eq!(flow.base.id.tuple.src_port, 50000);
+        assert_eq!(flow.base.id.tuple.dst_port, 53);
     }
 }
