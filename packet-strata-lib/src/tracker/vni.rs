@@ -68,7 +68,8 @@ impl std::error::Error for VniError {}
 ///
 /// Each variant contains exactly the fields required for that specific layer type.
 /// This makes invalid states unrepresentable at compile time.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum VniLayer {
     /// IEEE 802.1Q VLAN
     ///
