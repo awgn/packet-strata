@@ -10,7 +10,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 authors = ["Nicola Bonelli <nicola.bonelli@larthia.com>"]
 description = "A high-performance packet parsing library"
@@ -23,7 +23,7 @@ categories = ["network-programming", "parser-implementations"]
 keywords = ["packet", "parsing", "network", "pcap", "protocols"]
 
 [workspace.dependencies]
-packet-strata = { version = "0.4.0", path = "packet-strata-lib" }
+packet-strata = { version = "0.4.1", path = "packet-strata-lib" }
 smallvec = "1.16"
 smol_str = "0.3"
 thiserror = "2.0"

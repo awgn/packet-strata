@@ -270,6 +270,79 @@ where
         evicted
     }
 
+    /// Evicts up to `max_evictions` entries starting from the front (oldest) of the LRU queue
+    /// for which `predicate(k, v)` returns `true`, passing ownership of each evicted `(K, V)`
+    /// pair to `on_evict`.
+    ///
+    /// Unlike [`process_and_evict`](Self::process_and_evict) or [`evict_expired`](Self::evict_expired),
+    /// this method does not stop at the very first entry where `predicate` returns `false`.
+    /// Instead, it skips up to `look_ahead` non-matching entries while continuing to scan
+    /// towards newer entries. This is useful when flows have different per-protocol timeouts
+    /// (e.g., short UDP/DNS/ICMP timeouts behind longer-lived TCP flows).
+    pub fn evict_with_lookahead<P, F>(
+        &mut self,
+        max_evictions: usize,
+        look_ahead: usize,
+        mut predicate: P,
+        mut on_evict: F,
+    ) -> usize
+    where
+        P: FnMut(&K, &V) -> bool,
+        F: FnMut(K, V),
+    {
+        if max_evictions == 0 {
+            return 0;
+        }
+
+        let mut evicted = 0;
+        let mut skipped = 0;
+
+        while evicted < max_evictions {
+            match self.lru.front() {
+                Some((k, v)) => {
+                    if predicate(k, v) {
+                        if let Some((k, v)) = self.lru.pop_front() {
+                            on_evict(k, v);
+                            evicted += 1;
+                        }
+                    } else {
+                        skipped += 1;
+                        break;
+                    }
+                }
+                None => return evicted,
+            }
+        }
+
+        if evicted >= max_evictions || skipped > look_ahead {
+            return evicted;
+        }
+
+        let mut to_remove = smallvec::SmallVec::<[K; 32]>::new();
+        for (k, v) in self.lru.iter().skip(1) {
+            if predicate(k, v) {
+                to_remove.push(k.clone());
+                if evicted + to_remove.len() >= max_evictions {
+                    break;
+                }
+            } else {
+                skipped += 1;
+                if skipped > look_ahead {
+                    break;
+                }
+            }
+        }
+
+        for k in to_remove {
+            if let Some((k, v)) = self.lru.remove_entry(&k) {
+                on_evict(k, v);
+                evicted += 1;
+            }
+        }
+
+        evicted
+    }
+
     /// Drains and evicts all remaining entries in LRU order (from oldest to newest),
     /// passing ownership of each `(K, V)` pair to `on_evict`.
     pub fn drain_all<F>(&mut self, mut on_evict: F) -> usize
@@ -964,6 +1037,72 @@ mod tests {
         assert_eq!(drained, 1);
         assert_eq!(remaining, vec![(3, 3000)]);
         assert!(tracker.is_empty());
+    }
+
+    #[test]
+    fn test_evict_with_lookahead() {
+        let mut tracker = Tracker::<i32, FlowData>::with_capacity(16);
+
+        // Simulate mixed protocol timeouts where some newer entries expire before older ones:
+        // Key 1: ts=100, packets=5   (expired: packets < 10)
+        // Key 2: ts=200, packets=100 (NOT expired: e.g. long-lived TCP)
+        // Key 3: ts=300, packets=2   (expired: e.g. short DNS timeout)
+        // Key 4: ts=400, packets=100 (NOT expired)
+        // Key 5: ts=500, packets=1   (expired: e.g. short ICMP timeout)
+        // Key 6: ts=600, packets=100 (NOT expired)
+        // Key 7: ts=700, packets=3   (expired, but beyond look_ahead=2)
+        let entries = [
+            (1, 100, 5),
+            (2, 200, 100),
+            (3, 300, 2),
+            (4, 400, 100),
+            (5, 500, 1),
+            (6, 600, 100),
+            (7, 700, 3),
+        ];
+        for (k, ts, pkts) in entries {
+            tracker.get_or_insert_with(&k, || FlowData {
+                timestamp: ts,
+                bytes: (k as u64) * 1000,
+                packets: pkts,
+            });
+        }
+
+        // With look_ahead = 2 and max_evictions = 10:
+        // - Key 1 is popped from front (evicted=1, skipped=0)
+        // - Key 2 is skipped (skipped=1 <= 2)
+        // - Key 3 is evicted via lookahead (evicted=2)
+        // - Key 4 is skipped (skipped=2 <= 2)
+        // - Key 5 is evicted via lookahead (evicted=3)
+        // - Key 6 is skipped (skipped=3 > 2 -> stop!)
+        // - Key 7 is not reached
+        let mut evicted_keys = Vec::new();
+        let count = tracker.evict_with_lookahead(
+            10,
+            2,
+            |_k, v| v.packets < 10,
+            |k, _v| evicted_keys.push(k),
+        );
+
+        assert_eq!(count, 3);
+        assert_eq!(evicted_keys, vec![1, 3, 5]);
+
+        let remaining_keys: Vec<_> = tracker.keys().copied().collect();
+        assert_eq!(remaining_keys, vec![2, 4, 6, 7]);
+
+        // Test max_evictions cap with look_ahead = 5 and max_evictions = 1:
+        let mut evicted_capped = Vec::new();
+        let count_capped = tracker.evict_with_lookahead(
+            1,
+            5,
+            |_k, v| v.packets < 10,
+            |k, _v| evicted_capped.push(k),
+        );
+        assert_eq!(count_capped, 1);
+        assert_eq!(evicted_capped, vec![7]);
+
+        let final_keys: Vec<_> = tracker.keys().copied().collect();
+        assert_eq!(final_keys, vec![2, 4, 6]);
     }
 
     #[test]
