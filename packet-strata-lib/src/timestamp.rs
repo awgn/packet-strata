@@ -1,4 +1,4 @@
-use chrono::{DateTime};
+use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,

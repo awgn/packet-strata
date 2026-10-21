@@ -15,7 +15,7 @@ categories.workspace = true
 [dependencies]
 pcap-parser.workspace = true
 ahash = "0.8.12"
-hashlink = "0.11.0"
+hashlink = "0.11.1"
 smallvec = { workspace = true, features = ["const_new"] }
 smol_str.workspace = true
 thiserror.workspace = true

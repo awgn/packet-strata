@@ -7,7 +7,6 @@ use crate::stats::{LocalStats, Stats, FLUSH_INTERVAL};
 use crate::{Args, FlowTracker};
 use packet_strata::metadata::PacketMetadata;
 
-
 /// Process a single packet using the PacketIter iterator
 ///
 /// This function iterates through all headers in the packet and
@@ -33,14 +32,7 @@ pub fn process_packet<'a, Pkt: PacketMetadata>(
             args,
         );
     } else {
-        process_iterate_headers(
-            _pkt_count,
-            link_type,
-            pkt,
-            local_stats,
-            stats,
-            args,
-        );
+        process_iterate_headers(_pkt_count, link_type, pkt, local_stats, stats, args);
     }
 }
 
@@ -181,11 +173,7 @@ pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
 
 #[cold]
 #[inline(never)]
-fn dump_full_packet<Meta: PacketMetadata>(
-    total_packets: u64,
-    meta: &Meta,
-    packet: &Packet<'_>,
-) {
+fn dump_full_packet<Meta: PacketMetadata>(total_packets: u64, meta: &Meta, packet: &Packet<'_>) {
     println!(
         "{:>5}   {} ({} bytes)",
         total_packets,
@@ -294,14 +282,18 @@ pub fn process_full_packet<'a, Meta: PacketMetadata>(
                 if args.flow_tracker {
                     match packet.network() {
                         Some(NetworkLayer::Ipv4(_)) => {
-                            flow_tracker
-                                .v4
-                                .track_packet(meta, &packet, &mut flow_tracker.vni_mapper);
+                            flow_tracker.v4.track_packet(
+                                meta,
+                                &packet,
+                                &mut flow_tracker.vni_mapper,
+                            );
                         }
                         Some(NetworkLayer::Ipv6(_)) => {
-                            flow_tracker
-                                .v6
-                                .track_packet(meta, &packet, &mut flow_tracker.vni_mapper);
+                            flow_tracker.v6.track_packet(
+                                meta,
+                                &packet,
+                                &mut flow_tracker.vni_mapper,
+                            );
                         }
                         _ => {}
                     }

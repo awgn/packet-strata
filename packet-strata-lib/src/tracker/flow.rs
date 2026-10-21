@@ -421,8 +421,7 @@ impl<T: Tuple> FlowBase<T> {
             return l4_dir;
         }
 
-        if total_pkts >= 7 || (self.metrics.u_payload_pkts > 0 && self.metrics.d_payload_pkts > 0)
-        {
+        if total_pkts >= 7 || (self.metrics.u_payload_pkts > 0 && self.metrics.d_payload_pkts > 0) {
             self.confidence = Confidence::High;
         }
         tuple_dir
@@ -560,7 +559,9 @@ where
         self.base.timing.last = ts;
         self.base.metrics.update(pkt, dir, meta);
         self.base.ip.update(pkt, dir);
-        self.base.tcp.update_with_ts(pkt, dir, ts, &self.base.metrics);
+        self.base
+            .tcp
+            .update_with_ts(pkt, dir, ts, &self.base.metrics);
         self.data.process(meta, pkt, dir, &mut self.base);
         dir
     }
@@ -675,7 +676,8 @@ mod tests {
 
         // Packet 1: Mid-stream empty ACK from Server (55000) -> Client (50000).
         // Phase 1 (`Flow::new` + `flow.update`) guesses Upwards (55000 > 50000) with Confidence::Low.
-        let raw1 = build_tcp_ipv4_with_seq(srv_ip, clt_ip, srv_port, clt_port, 2000, 1000, 0x10, &[]);
+        let raw1 =
+            build_tcp_ipv4_with_seq(srv_ip, clt_ip, srv_port, clt_port, 2000, 1000, 0x10, &[]);
         let pkt1 = Packet::from_bytes(&raw1, LinkType::Ethernet, ParseMode::Outermost).unwrap();
         let tuple1 = TupleV4::new(&pkt1, &mut vni).unwrap();
 
@@ -696,7 +698,8 @@ mod tests {
         assert_eq!(flow.base.tcp.d_seq, 0);
 
         // Packet 2: Empty ACK from Client (50000) -> Server (55000).
-        let raw2 = build_tcp_ipv4_with_seq(clt_ip, srv_ip, clt_port, srv_port, 1000, 2000, 0x10, &[]);
+        let raw2 =
+            build_tcp_ipv4_with_seq(clt_ip, srv_ip, clt_port, srv_port, 1000, 2000, 0x10, &[]);
         let pkt2 = Packet::from_bytes(&raw2, LinkType::Ethernet, ParseMode::Outermost).unwrap();
         let d2 = flow.update(
             &DummyMeta {

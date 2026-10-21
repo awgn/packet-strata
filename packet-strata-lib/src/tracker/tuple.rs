@@ -460,8 +460,7 @@ impl Tuple for TupleV6 {
         state.write_u128(hi_ip);
         let meta = ((self.vni.as_u32() as u64) << 32)
             | ((lo_port as u64) << 16)
-            | (hi_port as u64)
-            ^ ((u8::from(self.protocol) as u64) << 56);
+            | (hi_port as u64) ^ ((u8::from(self.protocol) as u64) << 56);
         state.write_u64(meta);
     }
 
