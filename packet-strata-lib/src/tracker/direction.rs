@@ -30,8 +30,8 @@
 //!
 //! 3. **Same-Tier Tie-Breaker ([`Confidence::Low`])**:
 //!    If both ports fall into the exact same tier (e.g. two ephemeral ports `50000` and `55000`),
-//!    the higher port is provisionally treated as the client (`source > dest => Upwards`) with
-//!    [`Confidence::Low`], signaling that stateful L4 tracking or an external Phase 2 DPI engine
+//!    the first-seen packet sender is provisionally treated as the client ([`PacketDirection::Upwards`])
+//!    with [`Confidence::Low`], signaling that stateful L4 tracking or an external Phase 2 DPI engine
 //!    may flip the flow on subsequent packets.
 //!
 //! # Example
@@ -468,8 +468,8 @@ impl PacketDirection {
 
     /// Infers direction based on the 5-tier OS-aware port classification.
     ///
-    /// Returns `Confidence::High` when port ranks differ, and `Confidence::Low` when both ports
-    /// fall into the same rank (tie-breaker `source > dest`).
+    /// Returns `Confidence::High` when port ranks differ, and `Confidence::Low` (`Upwards`,
+    /// i.e. first-packet-seen) when both ports fall into the same rank.
     #[inline(always)]
     fn infer_direction_from_ports(source: u16, dest: u16) -> Option<(PacketDirection, Confidence)> {
         if source == dest {
@@ -482,13 +482,7 @@ impl PacketDirection {
         match src_rank.cmp(&dst_rank) {
             std::cmp::Ordering::Greater => Some((PacketDirection::Upwards, Confidence::High)),
             std::cmp::Ordering::Less => Some((PacketDirection::Downwards, Confidence::High)),
-            std::cmp::Ordering::Equal => {
-                if source > dest {
-                    Some((PacketDirection::Upwards, Confidence::Low))
-                } else {
-                    Some((PacketDirection::Downwards, Confidence::Low))
-                }
-            }
+            std::cmp::Ordering::Equal => Some((PacketDirection::Upwards, Confidence::Low)),
         }
     }
 }
@@ -676,14 +670,14 @@ mod tests {
             (PacketDirection::Downwards, Confidence::High)
         );
 
-        // Same rank: tie-breaker source > dest with Confidence::Low
+        // Same rank: first-packet-seen (Upwards) with Confidence::Low
         assert_eq!(
             infer_with_conf_bytes(&build_tcp_packet(55001, 55000, 0x10, &[])),
             (PacketDirection::Upwards, Confidence::Low)
         );
         assert_eq!(
             infer_with_conf_bytes(&build_tcp_packet(55000, 55001, 0x10, &[])),
-            (PacketDirection::Downwards, Confidence::Low)
+            (PacketDirection::Upwards, Confidence::Low)
         );
 
         // Symmetric ports -> Upwards fallback with Confidence::Low
