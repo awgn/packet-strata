@@ -185,20 +185,36 @@ pub struct IpState {
 
 impl IpState {
     #[inline(always)]
-    pub fn update(&mut self, pkt: &Packet<'_>, dir: PacketDirection) {
+    pub fn update(&mut self, pkt: &Packet<'_>, dir: PacketDirection, metrics: &FlowMetrics) {
         if let Some(NetworkLayer::Ipv4(h)) = pkt.network() {
             if !h.has_dont_fragment() {
                 let id = h.header.id();
-                let (last_id, lost) = match dir {
-                    PacketDirection::Upwards => (&mut self.u_id, &mut self.u_lost),
-                    PacketDirection::Downwards => (&mut self.d_id, &mut self.d_lost),
+                if id == 0 {
+                    return;
+                }
+                let (last_id, lost, pkts) = match dir {
+                    PacketDirection::Upwards => (&mut self.u_id, &mut self.u_lost, metrics.u_pkts),
+                    PacketDirection::Downwards => (&mut self.d_id, &mut self.d_lost, metrics.d_pkts),
                 };
 
-                if let Some(prev) = *last_id {
-                    let delta = id.wrapping_sub(prev);
-                    if delta > 0 && delta < 128 {
-                        *lost += (delta - 1) as u32;
+                match *last_id {
+                    Some(0) => return, // Tracking disabled (random or shared global IP.ID)
+                    Some(prev) => {
+                        let delta = id.wrapping_sub(prev);
+                        if delta > 0 && delta <= 16 {
+                            *lost += (delta - 1) as u32;
+                            if pkts >= 4 && *lost > pkts / 2 {
+                                *lost = 0;
+                                *last_id = Some(0);
+                                return;
+                            }
+                        } else if delta > 16 && delta < 65520 {
+                            *lost = 0;
+                            *last_id = Some(0);
+                            return;
+                        }
                     }
+                    None => {}
                 }
                 *last_id = Some(id);
             }
@@ -227,10 +243,14 @@ pub struct TcpState {
     pub rtt_net: Interval,
     /// User/Application component of the RTT.
     pub rtt_user: Interval,
-    /// Uplink sequence number.
+    /// Uplink next expected sequence number.
     pub u_seq: u32,
-    /// Downlink sequence number.
+    /// Downlink next expected sequence number.
     pub d_seq: u32,
+    /// Uplink retransmitted TCP packets.
+    pub u_rtx: u32,
+    /// Downlink retransmitted TCP packets.
+    pub d_rtx: u32,
     /// Current TCP status.
     pub status: TcpStatus,
 }
@@ -256,9 +276,29 @@ impl TcpState {
         metrics: &FlowMetrics,
     ) {
         if let Some(TransportLayer::Tcp(hdr)) = pkt.transport() {
-            match dir {
-                PacketDirection::Upwards => self.u_seq = hdr.sequence_number(),
-                PacketDirection::Downwards => self.d_seq = hdr.sequence_number(),
+            let seq = hdr.sequence_number();
+            let payload_len = pkt.data().len() as u32;
+            let end_seq = seq.wrapping_add(payload_len);
+
+            let (expected_seq, rtx, dir_pkts) = match dir {
+                PacketDirection::Upwards => (&mut self.u_seq, &mut self.u_rtx, metrics.u_pkts),
+                PacketDirection::Downwards => (&mut self.d_seq, &mut self.d_rtx, metrics.d_pkts),
+            };
+
+            if dir_pkts <= 1 || *expected_seq == 0 {
+                *expected_seq = end_seq;
+            } else {
+                let diff = end_seq.wrapping_sub(*expected_seq) as i32;
+                if diff > 0 {
+                    *expected_seq = end_seq;
+                } else if payload_len > 0 {
+                    // Segment does not advance expected_seq and carries payload:
+                    // ignore 1-byte TCP Keep-Alive probes (`seq == expected_seq - 1`).
+                    let is_keepalive = payload_len == 1 && seq.wrapping_add(1) == *expected_seq;
+                    if !is_keepalive {
+                        *rtx += 1;
+                    }
+                }
             }
 
             if hdr.has_rst() {
@@ -307,10 +347,11 @@ impl TcpState {
         }
     }
 
-    /// Swaps uplink and downlink TCP sequence numbers.
+    /// Swaps uplink and downlink TCP sequence numbers and retransmission counters.
     #[inline]
     pub fn swap_directions(&mut self) {
         std::mem::swap(&mut self.u_seq, &mut self.d_seq);
+        std::mem::swap(&mut self.u_rtx, &mut self.d_rtx);
     }
 }
 
@@ -581,7 +622,7 @@ where
         let ts = meta.timestamp();
         self.base.timing.last = ts;
         self.base.metrics.update(pkt, dir, meta);
-        self.base.ip.update(pkt, dir);
+        self.base.ip.update(pkt, dir, &self.base.metrics);
         self.base
             .tcp
             .update_with_ts(pkt, dir, ts, &self.base.metrics);
@@ -776,7 +817,7 @@ mod tests {
         assert_eq!(flow.base.metrics.d_payload_pkts, 0);
         assert_eq!(flow.base.metrics.u_payload_bytes, 26u64);
         assert_eq!(flow.base.metrics.d_payload_bytes, 0u64);
-        assert_eq!(flow.base.tcp.u_seq, 1005);
+        assert_eq!(flow.base.tcp.u_seq, 1031);
         assert_eq!(flow.base.tcp.d_seq, 2000);
     }
 
@@ -819,5 +860,105 @@ mod tests {
         assert_eq!(flow.base.id.tuple.dest_port(), srv_port);
         assert_eq!(flow.base.metrics.u_pkts, 0);
         assert_eq!(flow.base.metrics.d_pkts, 2);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_tcp_ipv4_with_ipid_and_df(
+        src_ip: [u8; 4],
+        dst_ip: [u8; 4],
+        src_port: u16,
+        dst_port: u16,
+        ip_id: u16,
+        df: bool,
+        seq: u32,
+        ack: u32,
+        flags: u8,
+        payload: &[u8],
+    ) -> Vec<u8> {
+        let total_len = (20 + 20 + payload.len()) as u16;
+        let mut buf = Vec::with_capacity(14 + total_len as usize);
+        buf.extend_from_slice(&[0x00, 0x00, 0x0C, 0x33, 0x44, 0x55]);
+        buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x99, 0xaa, 0xbb]);
+        buf.extend_from_slice(&[0x08, 0x00]);
+        buf.push(0x45);
+        buf.push(0x00);
+        buf.extend_from_slice(&total_len.to_be_bytes());
+        buf.extend_from_slice(&ip_id.to_be_bytes());
+        buf.extend_from_slice(if df { &[0x40, 0x00] } else { &[0x00, 0x00] });
+        buf.push(64);
+        buf.push(6); // TCP
+        buf.extend_from_slice(&[0x00, 0x00]);
+        buf.extend_from_slice(&src_ip);
+        buf.extend_from_slice(&dst_ip);
+        buf.extend_from_slice(&src_port.to_be_bytes());
+        buf.extend_from_slice(&dst_port.to_be_bytes());
+        buf.extend_from_slice(&seq.to_be_bytes());
+        buf.extend_from_slice(&ack.to_be_bytes());
+        buf.push(0x50);
+        buf.push(flags);
+        buf.extend_from_slice(&65535u16.to_be_bytes());
+        buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        buf.extend_from_slice(payload);
+        buf
+    }
+
+    #[test]
+    fn test_ip_loss_and_global_ipid_circuit_breaker() {
+        let mut vni = VniMapper::default();
+        let clt_ip = [10, 0, 0, 1];
+        let srv_ip = [10, 0, 0, 2];
+
+        // 1. Sequential per-flow IP.ID with DF=0 and a gap of 2 packets (100 -> 101 -> 104)
+        let p1 = build_tcp_ipv4_with_ipid_and_df(clt_ip, srv_ip, 50000, 443, 100, false, 1, 1, 0x02, &[]);
+        let pkt1 = Packet::from_bytes(&p1, LinkType::Ethernet, ParseMode::Outermost).unwrap();
+        let tuple = TupleV4::new(&pkt1, &mut vni).unwrap();
+        let mut flow: FlowIpV4<()> = Flow::new(Timestamp(1), tuple, &pkt1);
+        flow.update(&DummyMeta { ts: Timestamp(1), raw: &p1 }, &pkt1);
+
+        let p2 = build_tcp_ipv4_with_ipid_and_df(clt_ip, srv_ip, 50000, 443, 101, false, 2, 1, 0x10, b"a");
+        let pkt2 = Packet::from_bytes(&p2, LinkType::Ethernet, ParseMode::Outermost).unwrap();
+        flow.update(&DummyMeta { ts: Timestamp(2), raw: &p2 }, &pkt2);
+        assert_eq!(flow.base.ip.u_lost, 0);
+
+        let p3 = build_tcp_ipv4_with_ipid_and_df(clt_ip, srv_ip, 50000, 443, 104, false, 3, 1, 0x10, b"b");
+        let pkt3 = Packet::from_bytes(&p3, LinkType::Ethernet, ParseMode::Outermost).unwrap();
+        flow.update(&DummyMeta { ts: Timestamp(3), raw: &p3 }, &pkt3);
+        assert_eq!(flow.base.ip.u_lost, 2);
+
+        // 2. Downlink server with DF=0 but shared global IP.ID jumping > 16: circuit-breaker resets d_lost to 0 and disables tracking
+        for (i, &id) in [500u16, 505, 550, 552].iter().enumerate() {
+            let raw = build_tcp_ipv4_with_ipid_and_df(srv_ip, clt_ip, 443, 50000, id, false, 100 + i as u32, 2, 0x10, b"x");
+            let pkt = Packet::from_bytes(&raw, LinkType::Ethernet, ParseMode::Outermost).unwrap();
+            flow.update(&DummyMeta { ts: Timestamp(10 + i as u64), raw: &raw }, &pkt);
+        }
+        assert_eq!(flow.base.ip.d_lost, 0);
+        assert_eq!(flow.base.ip.d_id, Some(0));
+    }
+
+    #[test]
+    fn test_tcp_retransmission_and_keepalive() {
+        let mut vni = VniMapper::default();
+        let clt_ip = [10, 0, 0, 1];
+        let srv_ip = [10, 0, 0, 2];
+
+        // 1. Initial segment seq=1000, len=10 -> expected_seq becomes 1010
+        let p1 = build_tcp_ipv4_with_seq(clt_ip, srv_ip, 50000, 443, 1000, 1, 0x18, b"0123456789");
+        let pkt1 = Packet::from_bytes(&p1, LinkType::Ethernet, ParseMode::Outermost).unwrap();
+        let tuple = TupleV4::new(&pkt1, &mut vni).unwrap();
+        let mut flow: FlowIpV4<()> = Flow::new(Timestamp(1), tuple, &pkt1);
+        flow.update(&DummyMeta { ts: Timestamp(1), raw: &p1 }, &pkt1);
+        assert_eq!(flow.base.tcp.u_seq, 1010);
+        assert_eq!(flow.base.tcp.u_rtx, 0);
+
+        // 2. Retransmission of seq=1000, len=10 -> u_rtx becomes 1
+        flow.update(&DummyMeta { ts: Timestamp(2), raw: &p1 }, &pkt1);
+        assert_eq!(flow.base.tcp.u_seq, 1010);
+        assert_eq!(flow.base.tcp.u_rtx, 1);
+
+        // 3. TCP Keep-Alive probe (seq=1009 == expected_seq - 1, len=1) -> ignored, u_rtx stays 1
+        let ka = build_tcp_ipv4_with_seq(clt_ip, srv_ip, 50000, 443, 1009, 1, 0x10, b"0");
+        let pkt_ka = Packet::from_bytes(&ka, LinkType::Ethernet, ParseMode::Outermost).unwrap();
+        flow.update(&DummyMeta { ts: Timestamp(3), raw: &ka }, &pkt_ka);
+        assert_eq!(flow.base.tcp.u_rtx, 1);
     }
 }
