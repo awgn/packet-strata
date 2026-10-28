@@ -74,6 +74,8 @@
 
 use std::fmt::{self, Formatter};
 
+use smol_str::{SmolStr, SmolStrBuilder};
+
 use zerocopy::byteorder::{BigEndian, U16, U32};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
@@ -228,20 +230,21 @@ impl GeneveHeader {
     }
 
     /// Returns a string representation of flags
-    pub fn flags_string(&self) -> String {
-        let mut flags = Vec::new();
+    pub fn flags_string(&self) -> SmolStr {
+        let mut result = SmolStrBuilder::new();
 
         if self.is_oam() {
-            flags.push("O");
+            result.push('O');
         }
         if self.is_critical() {
-            flags.push("C");
+            result.push('C');
         }
 
+        let flags = result.finish();
         if flags.is_empty() {
-            "none".to_string()
+            SmolStr::new_inline("none")
         } else {
-            flags.join("")
+            flags
         }
     }
 }

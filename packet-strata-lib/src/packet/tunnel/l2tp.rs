@@ -107,6 +107,8 @@
 
 use std::fmt::{self, Formatter};
 
+use smol_str::{SmolStr, SmolStrBuilder};
+
 use zerocopy::byteorder::{BigEndian, U16, U32};
 use zerocopy::{FromBytes, IntoBytes, Unaligned};
 
@@ -623,27 +625,37 @@ impl L2tpv2Header {
     }
 
     /// Get a string representation of the flags
-    pub fn flags_string(&self) -> String {
-        let mut flags = Vec::new();
+    pub fn flags_string(&self) -> SmolStr {
+        let mut result = SmolStrBuilder::new();
+        let mut empty = true;
+        let mut push = |flag: char| {
+            if !empty {
+                result.push('|');
+            }
+            result.push(flag);
+            empty = false;
+        };
+
         if self.is_control() {
-            flags.push("T");
+            push('T');
         }
         if self.has_length() {
-            flags.push("L");
+            push('L');
         }
         if self.has_sequence() {
-            flags.push("S");
+            push('S');
         }
         if self.has_offset() {
-            flags.push("O");
+            push('O');
         }
         if self.has_priority() {
-            flags.push("P");
+            push('P');
         }
-        if flags.is_empty() {
-            "none".to_string()
+
+        if empty {
+            SmolStr::new_inline("none")
         } else {
-            flags.join("|")
+            result.finish()
         }
     }
 }
@@ -1239,21 +1251,31 @@ impl L2tpv3ControlHeader {
     }
 
     /// Get a string representation of the flags
-    pub fn flags_string(&self) -> String {
-        let mut flags = Vec::new();
+    pub fn flags_string(&self) -> SmolStr {
+        let mut result = SmolStrBuilder::new();
+        let mut empty = true;
+        let mut push = |flag: char| {
+            if !empty {
+                result.push('|');
+            }
+            result.push(flag);
+            empty = false;
+        };
+
         if self.is_control() {
-            flags.push("T");
+            push('T');
         }
         if self.has_length() {
-            flags.push("L");
+            push('L');
         }
         if self.has_sequence() {
-            flags.push("S");
+            push('S');
         }
-        if flags.is_empty() {
-            "none".to_string()
+
+        if empty {
+            SmolStr::new_inline("none")
         } else {
-            flags.join("|")
+            result.finish()
         }
     }
 }

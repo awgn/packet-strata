@@ -1005,7 +1005,7 @@ mod tests {
         let display_str = format!("{}", dhcp);
 
         assert!(
-            display_str.contains("bootrequest"),
+            display_str.contains("boot-request"),
             "Display string: {}",
             display_str
         );

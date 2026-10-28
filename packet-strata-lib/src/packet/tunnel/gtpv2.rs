@@ -70,6 +70,8 @@
 
 use std::fmt::{self, Formatter};
 
+use smol_str::{SmolStr, SmolStrBuilder};
+
 use zerocopy::byteorder::{BigEndian, U16};
 use zerocopy::{FromBytes, IntoBytes, Unaligned};
 
@@ -576,23 +578,31 @@ impl Gtpv2Header {
     }
 
     /// Returns a string representation of active flags
-    pub fn flags_string(&self) -> String {
-        let mut flags = Vec::new();
+    pub fn flags_string(&self) -> SmolStr {
+        let mut result = SmolStrBuilder::new();
+        let mut empty = true;
+        let mut push = |flag: &str| {
+            if !empty {
+                result.push(',');
+            }
+            result.push_str(flag);
+            empty = false;
+        };
 
         if self.has_piggybacking() {
-            flags.push("P");
+            push("P");
         }
         if self.has_teid() {
-            flags.push("T");
+            push("T");
         }
         if self.has_message_priority() {
-            flags.push("MP");
+            push("MP");
         }
 
-        if flags.is_empty() {
-            "none".to_string()
+        if empty {
+            SmolStr::new_inline("none")
         } else {
-            flags.join(",")
+            result.finish()
         }
     }
 }
