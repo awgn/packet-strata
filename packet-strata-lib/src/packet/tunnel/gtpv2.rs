@@ -305,147 +305,147 @@ impl From<u8> for Gtpv2MessageType {
 impl fmt::Display for Gtpv2MessageType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Gtpv2MessageType::EchoRequest => write!(f, "Echo Request"),
-            Gtpv2MessageType::EchoResponse => write!(f, "Echo Response"),
+            Gtpv2MessageType::EchoRequest => write!(f, "echo-request"),
+            Gtpv2MessageType::EchoResponse => write!(f, "echo-response"),
             Gtpv2MessageType::VersionNotSupportedIndication => {
-                write!(f, "Version Not Supported Indication")
+                write!(f, "version-not-supported-indication")
             }
-            Gtpv2MessageType::CreateSessionRequest => write!(f, "Create Session Request"),
-            Gtpv2MessageType::CreateSessionResponse => write!(f, "Create Session Response"),
-            Gtpv2MessageType::ModifyBearerRequest => write!(f, "Modify Bearer Request"),
-            Gtpv2MessageType::ModifyBearerResponse => write!(f, "Modify Bearer Response"),
-            Gtpv2MessageType::DeleteSessionRequest => write!(f, "Delete Session Request"),
-            Gtpv2MessageType::DeleteSessionResponse => write!(f, "Delete Session Response"),
-            Gtpv2MessageType::ChangeNotificationRequest => write!(f, "Change Notification Request"),
+            Gtpv2MessageType::CreateSessionRequest => write!(f, "create-session-request"),
+            Gtpv2MessageType::CreateSessionResponse => write!(f, "create-session-response"),
+            Gtpv2MessageType::ModifyBearerRequest => write!(f, "modify-bearer-request"),
+            Gtpv2MessageType::ModifyBearerResponse => write!(f, "modify-bearer-response"),
+            Gtpv2MessageType::DeleteSessionRequest => write!(f, "delete-session-request"),
+            Gtpv2MessageType::DeleteSessionResponse => write!(f, "delete-session-response"),
+            Gtpv2MessageType::ChangeNotificationRequest => write!(f, "change-notification-request"),
             Gtpv2MessageType::ChangeNotificationResponse => {
-                write!(f, "Change Notification Response")
+                write!(f, "change-notification-response")
             }
             Gtpv2MessageType::RemoteUeReportNotification => {
-                write!(f, "Remote UE Report Notification")
+                write!(f, "remote-ue-report-notification")
             }
             Gtpv2MessageType::RemoteUeReportAcknowledge => {
-                write!(f, "Remote UE Report Acknowledge")
+                write!(f, "remote-ue-report-acknowledge")
             }
-            Gtpv2MessageType::ModifyBearerCommand => write!(f, "Modify Bearer Command"),
+            Gtpv2MessageType::ModifyBearerCommand => write!(f, "modify-bearer-command"),
             Gtpv2MessageType::ModifyBearerFailureIndication => {
-                write!(f, "Modify Bearer Failure Indication")
+                write!(f, "modify-bearer-failure-indication")
             }
-            Gtpv2MessageType::DeleteBearerCommand => write!(f, "Delete Bearer Command"),
+            Gtpv2MessageType::DeleteBearerCommand => write!(f, "delete-bearer-command"),
             Gtpv2MessageType::DeleteBearerFailureIndication => {
-                write!(f, "Delete Bearer Failure Indication")
+                write!(f, "delete-bearer-failure-indication")
             }
-            Gtpv2MessageType::BearerResourceCommand => write!(f, "Bearer Resource Command"),
+            Gtpv2MessageType::BearerResourceCommand => write!(f, "bearer-resource-command"),
             Gtpv2MessageType::BearerResourceFailureIndication => {
-                write!(f, "Bearer Resource Failure Indication")
+                write!(f, "bearer-resource-failure-indication")
             }
-            Gtpv2MessageType::DownlinkDataNotification => write!(f, "Downlink Data Notification"),
+            Gtpv2MessageType::DownlinkDataNotification => write!(f, "downlink-data-notification"),
             Gtpv2MessageType::DownlinkDataNotificationAcknowledge => {
-                write!(f, "Downlink Data Notification Acknowledge")
+                write!(f, "downlink-data-notification-acknowledge")
             }
             Gtpv2MessageType::DownlinkDataNotificationFailureIndication => {
-                write!(f, "Downlink Data Notification Failure Indication")
+                write!(f, "downlink-data-notification-failure-indication")
             }
-            Gtpv2MessageType::CreateBearerRequest => write!(f, "Create Bearer Request"),
-            Gtpv2MessageType::CreateBearerResponse => write!(f, "Create Bearer Response"),
-            Gtpv2MessageType::UpdateBearerRequest => write!(f, "Update Bearer Request"),
-            Gtpv2MessageType::UpdateBearerResponse => write!(f, "Update Bearer Response"),
-            Gtpv2MessageType::DeleteBearerRequest => write!(f, "Delete Bearer Request"),
-            Gtpv2MessageType::DeleteBearerResponse => write!(f, "Delete Bearer Response"),
+            Gtpv2MessageType::CreateBearerRequest => write!(f, "create-bearer-request"),
+            Gtpv2MessageType::CreateBearerResponse => write!(f, "create-bearer-response"),
+            Gtpv2MessageType::UpdateBearerRequest => write!(f, "update-bearer-request"),
+            Gtpv2MessageType::UpdateBearerResponse => write!(f, "update-bearer-response"),
+            Gtpv2MessageType::DeleteBearerRequest => write!(f, "delete-bearer-request"),
+            Gtpv2MessageType::DeleteBearerResponse => write!(f, "delete-bearer-response"),
             Gtpv2MessageType::DeletePdnConnectionSetRequest => {
-                write!(f, "Delete PDN Connection Set Request")
+                write!(f, "delete-pdn-connection-set-request")
             }
             Gtpv2MessageType::DeletePdnConnectionSetResponse => {
-                write!(f, "Delete PDN Connection Set Response")
+                write!(f, "delete-pdn-connection-set-response")
             }
             Gtpv2MessageType::PgwDownlinkTriggeringNotification => {
-                write!(f, "PGW Downlink Triggering Notification")
+                write!(f, "pgw-downlink-triggering-notification")
             }
             Gtpv2MessageType::PgwDownlinkTriggeringAcknowledge => {
-                write!(f, "PGW Downlink Triggering Acknowledge")
+                write!(f, "pgw-downlink-triggering-acknowledge")
             }
-            Gtpv2MessageType::IdentificationRequest => write!(f, "Identification Request"),
-            Gtpv2MessageType::IdentificationResponse => write!(f, "Identification Response"),
-            Gtpv2MessageType::ContextRequest => write!(f, "Context Request"),
-            Gtpv2MessageType::ContextResponse => write!(f, "Context Response"),
-            Gtpv2MessageType::ContextAcknowledge => write!(f, "Context Acknowledge"),
-            Gtpv2MessageType::ForwardRelocationRequest => write!(f, "Forward Relocation Request"),
-            Gtpv2MessageType::ForwardRelocationResponse => write!(f, "Forward Relocation Response"),
+            Gtpv2MessageType::IdentificationRequest => write!(f, "identification-request"),
+            Gtpv2MessageType::IdentificationResponse => write!(f, "identification-response"),
+            Gtpv2MessageType::ContextRequest => write!(f, "context-request"),
+            Gtpv2MessageType::ContextResponse => write!(f, "context-response"),
+            Gtpv2MessageType::ContextAcknowledge => write!(f, "context-acknowledge"),
+            Gtpv2MessageType::ForwardRelocationRequest => write!(f, "forward-relocation-request"),
+            Gtpv2MessageType::ForwardRelocationResponse => write!(f, "forward-relocation-response"),
             Gtpv2MessageType::ForwardRelocationCompleteNotification => {
-                write!(f, "Forward Relocation Complete Notification")
+                write!(f, "forward-relocation-complete-notification")
             }
             Gtpv2MessageType::ForwardRelocationCompleteAcknowledge => {
-                write!(f, "Forward Relocation Complete Acknowledge")
+                write!(f, "forward-relocation-complete-acknowledge")
             }
             Gtpv2MessageType::ForwardAccessContextNotification => {
-                write!(f, "Forward Access Context Notification")
+                write!(f, "forward-access-context-notification")
             }
             Gtpv2MessageType::ForwardAccessContextAcknowledge => {
-                write!(f, "Forward Access Context Acknowledge")
+                write!(f, "forward-access-context-acknowledge")
             }
-            Gtpv2MessageType::RelocationCancelRequest => write!(f, "Relocation Cancel Request"),
-            Gtpv2MessageType::RelocationCancelResponse => write!(f, "Relocation Cancel Response"),
+            Gtpv2MessageType::RelocationCancelRequest => write!(f, "relocation-cancel-request"),
+            Gtpv2MessageType::RelocationCancelResponse => write!(f, "relocation-cancel-response"),
             Gtpv2MessageType::ConfigurationTransferTunnel => {
-                write!(f, "Configuration Transfer Tunnel")
+                write!(f, "configuration-transfer-tunnel")
             }
-            Gtpv2MessageType::DetachNotification => write!(f, "Detach Notification"),
-            Gtpv2MessageType::DetachAcknowledge => write!(f, "Detach Acknowledge"),
-            Gtpv2MessageType::CsPagingIndication => write!(f, "CS Paging Indication"),
-            Gtpv2MessageType::RanInformationRelay => write!(f, "RAN Information Relay"),
-            Gtpv2MessageType::AlertMmeNotification => write!(f, "Alert MME Notification"),
-            Gtpv2MessageType::AlertMmeAcknowledge => write!(f, "Alert MME Acknowledge"),
-            Gtpv2MessageType::UeActivityNotification => write!(f, "UE Activity Notification"),
-            Gtpv2MessageType::UeActivityAcknowledge => write!(f, "UE Activity Acknowledge"),
-            Gtpv2MessageType::IsrStatusIndication => write!(f, "ISR Status Indication"),
+            Gtpv2MessageType::DetachNotification => write!(f, "detach-notification"),
+            Gtpv2MessageType::DetachAcknowledge => write!(f, "detach-acknowledge"),
+            Gtpv2MessageType::CsPagingIndication => write!(f, "cs-paging-indication"),
+            Gtpv2MessageType::RanInformationRelay => write!(f, "ran-information-relay"),
+            Gtpv2MessageType::AlertMmeNotification => write!(f, "alert-mme-notification"),
+            Gtpv2MessageType::AlertMmeAcknowledge => write!(f, "alert-mme-acknowledge"),
+            Gtpv2MessageType::UeActivityNotification => write!(f, "ue-activity-notification"),
+            Gtpv2MessageType::UeActivityAcknowledge => write!(f, "ue-activity-acknowledge"),
+            Gtpv2MessageType::IsrStatusIndication => write!(f, "isr-status-indication"),
             Gtpv2MessageType::UeRegistrationQueryRequest => {
-                write!(f, "UE Registration Query Request")
+                write!(f, "ue-registration-query-request")
             }
             Gtpv2MessageType::UeRegistrationQueryResponse => {
-                write!(f, "UE Registration Query Response")
+                write!(f, "ue-registration-query-response")
             }
             Gtpv2MessageType::CreateForwardingTunnelRequest => {
-                write!(f, "Create Forwarding Tunnel Request")
+                write!(f, "create-forwarding-tunnel-request")
             }
             Gtpv2MessageType::CreateForwardingTunnelResponse => {
-                write!(f, "Create Forwarding Tunnel Response")
+                write!(f, "create-forwarding-tunnel-response")
             }
-            Gtpv2MessageType::SuspendNotification => write!(f, "Suspend Notification"),
-            Gtpv2MessageType::SuspendAcknowledge => write!(f, "Suspend Acknowledge"),
-            Gtpv2MessageType::ResumeNotification => write!(f, "Resume Notification"),
-            Gtpv2MessageType::ResumeAcknowledge => write!(f, "Resume Acknowledge"),
+            Gtpv2MessageType::SuspendNotification => write!(f, "suspend-notification"),
+            Gtpv2MessageType::SuspendAcknowledge => write!(f, "suspend-acknowledge"),
+            Gtpv2MessageType::ResumeNotification => write!(f, "resume-notification"),
+            Gtpv2MessageType::ResumeAcknowledge => write!(f, "resume-acknowledge"),
             Gtpv2MessageType::CreateIndirectDataForwardingTunnelRequest => {
-                write!(f, "Create Indirect Data Forwarding Tunnel Request")
+                write!(f, "create-indirect-data-forwarding-tunnel-request")
             }
             Gtpv2MessageType::CreateIndirectDataForwardingTunnelResponse => {
-                write!(f, "Create Indirect Data Forwarding Tunnel Response")
+                write!(f, "create-indirect-data-forwarding-tunnel-response")
             }
             Gtpv2MessageType::DeleteIndirectDataForwardingTunnelRequest => {
-                write!(f, "Delete Indirect Data Forwarding Tunnel Request")
+                write!(f, "delete-indirect-data-forwarding-tunnel-request")
             }
             Gtpv2MessageType::DeleteIndirectDataForwardingTunnelResponse => {
-                write!(f, "Delete Indirect Data Forwarding Tunnel Response")
+                write!(f, "delete-indirect-data-forwarding-tunnel-response")
             }
             Gtpv2MessageType::ReleaseAccessBearersRequest => {
-                write!(f, "Release Access Bearers Request")
+                write!(f, "release-access-bearers-request")
             }
             Gtpv2MessageType::ReleaseAccessBearersResponse => {
-                write!(f, "Release Access Bearers Response")
+                write!(f, "release-access-bearers-response")
             }
-            Gtpv2MessageType::StopPagingIndication => write!(f, "Stop Paging Indication"),
+            Gtpv2MessageType::StopPagingIndication => write!(f, "stop-paging-indication"),
             Gtpv2MessageType::ModifyAccessBearersRequest => {
-                write!(f, "Modify Access Bearers Request")
+                write!(f, "modify-access-bearers-request")
             }
             Gtpv2MessageType::ModifyAccessBearersResponse => {
-                write!(f, "Modify Access Bearers Response")
+                write!(f, "modify-access-bearers-response")
             }
-            Gtpv2MessageType::MbmsSessionStartRequest => write!(f, "MBMS Session Start Request"),
-            Gtpv2MessageType::MbmsSessionStartResponse => write!(f, "MBMS Session Start Response"),
-            Gtpv2MessageType::MbmsSessionUpdateRequest => write!(f, "MBMS Session Update Request"),
+            Gtpv2MessageType::MbmsSessionStartRequest => write!(f, "mbms-session-start-request"),
+            Gtpv2MessageType::MbmsSessionStartResponse => write!(f, "mbms-session-start-response"),
+            Gtpv2MessageType::MbmsSessionUpdateRequest => write!(f, "mbms-session-update-request"),
             Gtpv2MessageType::MbmsSessionUpdateResponse => {
-                write!(f, "MBMS Session Update Response")
+                write!(f, "mbms-session-update-response")
             }
-            Gtpv2MessageType::MbmsSessionStopRequest => write!(f, "MBMS Session Stop Request"),
-            Gtpv2MessageType::MbmsSessionStopResponse => write!(f, "MBMS Session Stop Response"),
-            Gtpv2MessageType::Unknown => write!(f, "Unknown"),
+            Gtpv2MessageType::MbmsSessionStopRequest => write!(f, "mbms-session-stop-request"),
+            Gtpv2MessageType::MbmsSessionStopResponse => write!(f, "mbms-session-stop-response"),
+            Gtpv2MessageType::Unknown => write!(f, "unknown"),
         }
     }
 }
@@ -1047,7 +1047,7 @@ mod tests {
         let (header, _) = Gtpv2Header::from_bytes(&packet).unwrap();
         let display = format!("{}", *header);
         assert!(display.contains("GTPv2-C"));
-        assert!(display.contains("Create Session Request"));
+        assert!(display.contains("create-session-request"));
     }
 
     #[test]

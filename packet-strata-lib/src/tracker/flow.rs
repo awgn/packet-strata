@@ -194,7 +194,9 @@ impl IpState {
                 }
                 let (last_id, lost, pkts) = match dir {
                     PacketDirection::Upwards => (&mut self.u_id, &mut self.u_lost, metrics.u_pkts),
-                    PacketDirection::Downwards => (&mut self.d_id, &mut self.d_lost, metrics.d_pkts),
+                    PacketDirection::Downwards => {
+                        (&mut self.d_id, &mut self.d_lost, metrics.d_pkts)
+                    }
                 };
 
                 match *last_id {
@@ -909,27 +911,77 @@ mod tests {
         let srv_ip = [10, 0, 0, 2];
 
         // 1. Sequential per-flow IP.ID with DF=0 and a gap of 2 packets (100 -> 101 -> 104)
-        let p1 = build_tcp_ipv4_with_ipid_and_df(clt_ip, srv_ip, 50000, 443, 100, false, 1, 1, 0x02, &[]);
+        let p1 = build_tcp_ipv4_with_ipid_and_df(
+            clt_ip,
+            srv_ip,
+            50000,
+            443,
+            100,
+            false,
+            1,
+            1,
+            0x02,
+            &[],
+        );
         let pkt1 = Packet::from_bytes(&p1, LinkType::Ethernet, ParseMode::Outermost).unwrap();
         let tuple = TupleV4::new(&pkt1, &mut vni).unwrap();
         let mut flow: FlowIpV4<()> = Flow::new(Timestamp(1), tuple, &pkt1);
-        flow.update(&DummyMeta { ts: Timestamp(1), raw: &p1 }, &pkt1);
+        flow.update(
+            &DummyMeta {
+                ts: Timestamp(1),
+                raw: &p1,
+            },
+            &pkt1,
+        );
 
-        let p2 = build_tcp_ipv4_with_ipid_and_df(clt_ip, srv_ip, 50000, 443, 101, false, 2, 1, 0x10, b"a");
+        let p2 = build_tcp_ipv4_with_ipid_and_df(
+            clt_ip, srv_ip, 50000, 443, 101, false, 2, 1, 0x10, b"a",
+        );
         let pkt2 = Packet::from_bytes(&p2, LinkType::Ethernet, ParseMode::Outermost).unwrap();
-        flow.update(&DummyMeta { ts: Timestamp(2), raw: &p2 }, &pkt2);
+        flow.update(
+            &DummyMeta {
+                ts: Timestamp(2),
+                raw: &p2,
+            },
+            &pkt2,
+        );
         assert_eq!(flow.base.ip.u_lost, 0);
 
-        let p3 = build_tcp_ipv4_with_ipid_and_df(clt_ip, srv_ip, 50000, 443, 104, false, 3, 1, 0x10, b"b");
+        let p3 = build_tcp_ipv4_with_ipid_and_df(
+            clt_ip, srv_ip, 50000, 443, 104, false, 3, 1, 0x10, b"b",
+        );
         let pkt3 = Packet::from_bytes(&p3, LinkType::Ethernet, ParseMode::Outermost).unwrap();
-        flow.update(&DummyMeta { ts: Timestamp(3), raw: &p3 }, &pkt3);
+        flow.update(
+            &DummyMeta {
+                ts: Timestamp(3),
+                raw: &p3,
+            },
+            &pkt3,
+        );
         assert_eq!(flow.base.ip.u_lost, 2);
 
         // 2. Downlink server with DF=0 but shared global IP.ID jumping > 16: circuit-breaker resets d_lost to 0 and disables tracking
         for (i, &id) in [500u16, 505, 550, 552].iter().enumerate() {
-            let raw = build_tcp_ipv4_with_ipid_and_df(srv_ip, clt_ip, 443, 50000, id, false, 100 + i as u32, 2, 0x10, b"x");
+            let raw = build_tcp_ipv4_with_ipid_and_df(
+                srv_ip,
+                clt_ip,
+                443,
+                50000,
+                id,
+                false,
+                100 + i as u32,
+                2,
+                0x10,
+                b"x",
+            );
             let pkt = Packet::from_bytes(&raw, LinkType::Ethernet, ParseMode::Outermost).unwrap();
-            flow.update(&DummyMeta { ts: Timestamp(10 + i as u64), raw: &raw }, &pkt);
+            flow.update(
+                &DummyMeta {
+                    ts: Timestamp(10 + i as u64),
+                    raw: &raw,
+                },
+                &pkt,
+            );
         }
         assert_eq!(flow.base.ip.d_lost, 0);
         assert_eq!(flow.base.ip.d_id, Some(0));
@@ -946,19 +998,37 @@ mod tests {
         let pkt1 = Packet::from_bytes(&p1, LinkType::Ethernet, ParseMode::Outermost).unwrap();
         let tuple = TupleV4::new(&pkt1, &mut vni).unwrap();
         let mut flow: FlowIpV4<()> = Flow::new(Timestamp(1), tuple, &pkt1);
-        flow.update(&DummyMeta { ts: Timestamp(1), raw: &p1 }, &pkt1);
+        flow.update(
+            &DummyMeta {
+                ts: Timestamp(1),
+                raw: &p1,
+            },
+            &pkt1,
+        );
         assert_eq!(flow.base.tcp.u_seq, 1010);
         assert_eq!(flow.base.tcp.u_rtx, 0);
 
         // 2. Retransmission of seq=1000, len=10 -> u_rtx becomes 1
-        flow.update(&DummyMeta { ts: Timestamp(2), raw: &p1 }, &pkt1);
+        flow.update(
+            &DummyMeta {
+                ts: Timestamp(2),
+                raw: &p1,
+            },
+            &pkt1,
+        );
         assert_eq!(flow.base.tcp.u_seq, 1010);
         assert_eq!(flow.base.tcp.u_rtx, 1);
 
         // 3. TCP Keep-Alive probe (seq=1009 == expected_seq - 1, len=1) -> ignored, u_rtx stays 1
         let ka = build_tcp_ipv4_with_seq(clt_ip, srv_ip, 50000, 443, 1009, 1, 0x10, b"0");
         let pkt_ka = Packet::from_bytes(&ka, LinkType::Ethernet, ParseMode::Outermost).unwrap();
-        flow.update(&DummyMeta { ts: Timestamp(3), raw: &ka }, &pkt_ka);
+        flow.update(
+            &DummyMeta {
+                ts: Timestamp(3),
+                raw: &ka,
+            },
+            &pkt_ka,
+        );
         assert_eq!(flow.base.tcp.u_rtx, 1);
     }
 }

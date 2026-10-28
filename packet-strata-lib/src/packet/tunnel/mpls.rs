@@ -136,14 +136,14 @@ impl MplsReservedLabel {
 impl fmt::Display for MplsReservedLabel {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            MplsReservedLabel::Ipv4ExplicitNull => write!(f, "IPv4 Explicit NULL"),
-            MplsReservedLabel::RouterAlert => write!(f, "Router Alert"),
-            MplsReservedLabel::Ipv6ExplicitNull => write!(f, "IPv6 Explicit NULL"),
-            MplsReservedLabel::ImplicitNull => write!(f, "Implicit NULL"),
-            MplsReservedLabel::EntropyLabelIndicator => write!(f, "Entropy Label Indicator"),
-            MplsReservedLabel::Gal => write!(f, "GAL"),
-            MplsReservedLabel::OamAlert => write!(f, "OAM Alert"),
-            MplsReservedLabel::Extension => write!(f, "Extension"),
+            MplsReservedLabel::Ipv4ExplicitNull => write!(f, "ipv4-explicit-null"),
+            MplsReservedLabel::RouterAlert => write!(f, "router-alert"),
+            MplsReservedLabel::Ipv6ExplicitNull => write!(f, "ipv6-explicit-null"),
+            MplsReservedLabel::ImplicitNull => write!(f, "implicit-null"),
+            MplsReservedLabel::EntropyLabelIndicator => write!(f, "entropy-label-indicator"),
+            MplsReservedLabel::Gal => write!(f, "gal"),
+            MplsReservedLabel::OamAlert => write!(f, "oam-alert"),
+            MplsReservedLabel::Extension => write!(f, "extension"),
         }
     }
 }
@@ -717,7 +717,7 @@ mod tests {
         let packet = vec![0x00, 0x00, 0x01, 0x40]; // Label=0
         let (label, _) = MplsLabel::from_bytes(&packet).unwrap();
         let display = format!("{}", label);
-        assert!(display.contains("IPv4 Explicit NULL"));
+        assert!(display.contains("ipv4-explicit-null"));
     }
 
     #[test]

@@ -136,12 +136,12 @@ impl AddressFamily {
 impl Display for AddressFamily {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            AddressFamily::Inet => write!(f, "AF_INET"),
-            AddressFamily::Inet6Linux => write!(f, "AF_INET6 (Linux)"),
-            AddressFamily::Inet6Darwin => write!(f, "AF_INET6 (Darwin)"),
-            AddressFamily::Inet6FreeBsd => write!(f, "AF_INET6 (FreeBSD)"),
-            AddressFamily::Inet6OpenBsd => write!(f, "AF_INET6 (OpenBSD)"),
-            AddressFamily::Unknown(v) => write!(f, "Unknown({})", v),
+            AddressFamily::Inet => write!(f, "af-inet"),
+            AddressFamily::Inet6Linux => write!(f, "af-inet6-linux"),
+            AddressFamily::Inet6Darwin => write!(f, "af-inet6-darwin"),
+            AddressFamily::Inet6FreeBsd => write!(f, "af-inet6-freebsd"),
+            AddressFamily::Inet6OpenBsd => write!(f, "af-inet6-openbsd"),
+            AddressFamily::Unknown(v) => write!(f, "unknown({})", v),
         }
     }
 }
@@ -356,18 +356,15 @@ mod tests {
         let display = format!("{}", header);
         assert!(display.contains("Null"));
         assert!(display.contains("family="));
-        assert!(display.contains("AF_INET"));
+        assert!(display.contains("af-inet"));
     }
 
     #[test]
     fn test_address_family_display() {
-        assert_eq!(format!("{}", AddressFamily::Inet), "AF_INET");
-        assert_eq!(format!("{}", AddressFamily::Inet6Linux), "AF_INET6 (Linux)");
-        assert_eq!(
-            format!("{}", AddressFamily::Inet6Darwin),
-            "AF_INET6 (Darwin)"
-        );
-        assert_eq!(format!("{}", AddressFamily::Unknown(99)), "Unknown(99)");
+        assert_eq!(format!("{}", AddressFamily::Inet), "af-inet");
+        assert_eq!(format!("{}", AddressFamily::Inet6Linux), "af-inet6-linux");
+        assert_eq!(format!("{}", AddressFamily::Inet6Darwin), "af-inet6-darwin");
+        assert_eq!(format!("{}", AddressFamily::Unknown(99)), "unknown(99)");
     }
 
     #[test]

@@ -44,10 +44,10 @@ impl IpipType {
     /// Returns the tunnel type name
     pub fn name(&self) -> &'static str {
         match self {
-            Self::Ipip => "IPIP",
-            Self::Sit => "SIT",
-            Self::Ip4in6 => "IP4in6",
-            Self::Ip6Tnl => "IP6Tnl",
+            Self::Ipip => "ipip",
+            Self::Sit => "sit",
+            Self::Ip4in6 => "ip4in6",
+            Self::Ip6Tnl => "ip6tnl",
         }
     }
 
@@ -184,10 +184,10 @@ mod tests {
 
     #[test]
     fn test_tunnel_type_names() {
-        assert_eq!(IpipType::Ipip.name(), "IPIP");
-        assert_eq!(IpipType::Sit.name(), "SIT");
-        assert_eq!(IpipType::Ip4in6.name(), "IP4in6");
-        assert_eq!(IpipType::Ip6Tnl.name(), "IP6Tnl");
+        assert_eq!(IpipType::Ipip.name(), "ipip");
+        assert_eq!(IpipType::Sit.name(), "sit");
+        assert_eq!(IpipType::Ip4in6.name(), "ip4in6");
+        assert_eq!(IpipType::Ip6Tnl.name(), "ip6tnl");
     }
 
     #[test]
@@ -200,9 +200,9 @@ mod tests {
 
     #[test]
     fn test_tunnel_type_display() {
-        assert_eq!(format!("{}", IpipType::Ipip), "IPIP");
-        assert_eq!(format!("{}", IpipType::Sit), "SIT");
-        assert_eq!(format!("{}", IpipType::Ip4in6), "IP4in6");
-        assert_eq!(format!("{}", IpipType::Ip6Tnl), "IP6Tnl");
+        assert_eq!(format!("{}", IpipType::Ipip), "ipip");
+        assert_eq!(format!("{}", IpipType::Sit), "sit");
+        assert_eq!(format!("{}", IpipType::Ip4in6), "ip4in6");
+        assert_eq!(format!("{}", IpipType::Ip6Tnl), "ip6tnl");
     }
 }

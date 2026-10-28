@@ -174,35 +174,35 @@ impl From<u8> for Gtpv1MessageType {
 impl fmt::Display for Gtpv1MessageType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Gtpv1MessageType::EchoRequest => write!(f, "Echo Request"),
-            Gtpv1MessageType::EchoResponse => write!(f, "Echo Response"),
-            Gtpv1MessageType::VersionNotSupported => write!(f, "Version Not Supported"),
-            Gtpv1MessageType::CreatePdpContextRequest => write!(f, "Create PDP Context Request"),
-            Gtpv1MessageType::CreatePdpContextResponse => write!(f, "Create PDP Context Response"),
-            Gtpv1MessageType::UpdatePdpContextRequest => write!(f, "Update PDP Context Request"),
-            Gtpv1MessageType::UpdatePdpContextResponse => write!(f, "Update PDP Context Response"),
-            Gtpv1MessageType::DeletePdpContextRequest => write!(f, "Delete PDP Context Request"),
-            Gtpv1MessageType::DeletePdpContextResponse => write!(f, "Delete PDP Context Response"),
-            Gtpv1MessageType::ErrorIndication => write!(f, "Error Indication"),
+            Gtpv1MessageType::EchoRequest => write!(f, "echo-request"),
+            Gtpv1MessageType::EchoResponse => write!(f, "echo-response"),
+            Gtpv1MessageType::VersionNotSupported => write!(f, "version-not-supported"),
+            Gtpv1MessageType::CreatePdpContextRequest => write!(f, "create-pdp-context-request"),
+            Gtpv1MessageType::CreatePdpContextResponse => write!(f, "create-pdp-context-response"),
+            Gtpv1MessageType::UpdatePdpContextRequest => write!(f, "update-pdp-context-request"),
+            Gtpv1MessageType::UpdatePdpContextResponse => write!(f, "update-pdp-context-response"),
+            Gtpv1MessageType::DeletePdpContextRequest => write!(f, "delete-pdp-context-request"),
+            Gtpv1MessageType::DeletePdpContextResponse => write!(f, "delete-pdp-context-response"),
+            Gtpv1MessageType::ErrorIndication => write!(f, "error-indication"),
             Gtpv1MessageType::SupportedExtensionHeadersNotification => {
-                write!(f, "Supported Extension Headers Notification")
+                write!(f, "supported-extension-headers-notification")
             }
-            Gtpv1MessageType::SendRoutingInfoRequest => write!(f, "Send Routing Info Request"),
-            Gtpv1MessageType::SendRoutingInfoResponse => write!(f, "Send Routing Info Response"),
-            Gtpv1MessageType::SgsnContextRequest => write!(f, "SGSN Context Request"),
-            Gtpv1MessageType::SgsnContextResponse => write!(f, "SGSN Context Response"),
-            Gtpv1MessageType::SgsnContextAcknowledge => write!(f, "SGSN Context Acknowledge"),
-            Gtpv1MessageType::MbmsNotificationRequest => write!(f, "MBMS Notification Request"),
-            Gtpv1MessageType::MbmsNotificationResponse => write!(f, "MBMS Notification Response"),
+            Gtpv1MessageType::SendRoutingInfoRequest => write!(f, "send-routing-info-request"),
+            Gtpv1MessageType::SendRoutingInfoResponse => write!(f, "send-routing-info-response"),
+            Gtpv1MessageType::SgsnContextRequest => write!(f, "sgsn-context-request"),
+            Gtpv1MessageType::SgsnContextResponse => write!(f, "sgsn-context-response"),
+            Gtpv1MessageType::SgsnContextAcknowledge => write!(f, "sgsn-context-acknowledge"),
+            Gtpv1MessageType::MbmsNotificationRequest => write!(f, "mbms-notification-request"),
+            Gtpv1MessageType::MbmsNotificationResponse => write!(f, "mbms-notification-response"),
             Gtpv1MessageType::MbmsNotificationRejectRequest => {
-                write!(f, "MBMS Notification Reject Request")
+                write!(f, "mbms-notification-reject-request")
             }
             Gtpv1MessageType::MbmsNotificationRejectResponse => {
-                write!(f, "MBMS Notification Reject Response")
+                write!(f, "mbms-notification-reject-response")
             }
-            Gtpv1MessageType::EndMarker => write!(f, "End Marker"),
-            Gtpv1MessageType::GPdu => write!(f, "G-PDU"),
-            Gtpv1MessageType::Unknown => write!(f, "Unknown"),
+            Gtpv1MessageType::EndMarker => write!(f, "end-marker"),
+            Gtpv1MessageType::GPdu => write!(f, "g-pdu"),
+            Gtpv1MessageType::Unknown => write!(f, "unknown"),
         }
     }
 }
@@ -947,7 +947,7 @@ mod tests {
         let (header, _) = Gtpv1Header::from_bytes(&packet).unwrap();
         let display = format!("{}", *header);
         assert!(display.contains("GTPv1"));
-        assert!(display.contains("G-PDU"));
+        assert!(display.contains("g-pdu"));
     }
 
     #[test]

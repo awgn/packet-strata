@@ -547,9 +547,9 @@ impl From<u8> for PbbTeEspType {
 impl fmt::Display for PbbTeEspType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            PbbTeEspType::Working => write!(f, "Working"),
-            PbbTeEspType::Protection => write!(f, "Protection"),
-            PbbTeEspType::Unknown(v) => write!(f, "Unknown({})", v),
+            PbbTeEspType::Working => write!(f, "working"),
+            PbbTeEspType::Protection => write!(f, "protection"),
+            PbbTeEspType::Unknown(v) => write!(f, "unknown({})", v),
         }
     }
 }
@@ -810,9 +810,9 @@ mod tests {
         assert_eq!(PbbTeEspType::from(1), PbbTeEspType::Protection);
         assert_eq!(PbbTeEspType::from(2), PbbTeEspType::Unknown(2));
 
-        assert_eq!(format!("{}", PbbTeEspType::Working), "Working");
-        assert_eq!(format!("{}", PbbTeEspType::Protection), "Protection");
-        assert_eq!(format!("{}", PbbTeEspType::Unknown(5)), "Unknown(5)");
+        assert_eq!(format!("{}", PbbTeEspType::Working), "working");
+        assert_eq!(format!("{}", PbbTeEspType::Protection), "protection");
+        assert_eq!(format!("{}", PbbTeEspType::Unknown(5)), "unknown(5)");
     }
 
     #[test]

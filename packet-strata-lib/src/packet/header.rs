@@ -47,9 +47,9 @@ pub enum UnknownProto {
 impl std::fmt::Display for UnknownProto {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UnknownProto::Ether(p) => write!(f, "EtherType(0x{:04x})", p.0.get()),
-            UnknownProto::Ip(p) => write!(f, "IpProto({})", u8::from(*p)),
-            UnknownProto::Tunnel(name) => write!(f, "Tunnel({})", name),
+            UnknownProto::Ether(p) => write!(f, "ether-type(0x{:04x})", p.0.get()),
+            UnknownProto::Ip(p) => write!(f, "ip-proto({})", u8::from(*p)),
+            UnknownProto::Tunnel(name) => write!(f, "tunnel-{}", name),
         }
     }
 }

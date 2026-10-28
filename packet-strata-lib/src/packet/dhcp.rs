@@ -111,8 +111,8 @@ impl DhcpOpCode {
 impl Display for DhcpOpCode {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            DhcpOpCode::BOOTREQUEST => write!(f, "BOOTREQUEST"),
-            DhcpOpCode::BOOTREPLY => write!(f, "BOOTREPLY"),
+            DhcpOpCode::BOOTREQUEST => write!(f, "boot-request"),
+            DhcpOpCode::BOOTREPLY => write!(f, "boot-reply"),
         }
     }
 }
@@ -177,14 +177,14 @@ impl DhcpMessageType {
 impl Display for DhcpMessageType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            DhcpMessageType::DISCOVER => write!(f, "DISCOVER"),
-            DhcpMessageType::OFFER => write!(f, "OFFER"),
-            DhcpMessageType::REQUEST => write!(f, "REQUEST"),
-            DhcpMessageType::DECLINE => write!(f, "DECLINE"),
-            DhcpMessageType::ACK => write!(f, "ACK"),
-            DhcpMessageType::NAK => write!(f, "NAK"),
-            DhcpMessageType::RELEASE => write!(f, "RELEASE"),
-            DhcpMessageType::INFORM => write!(f, "INFORM"),
+            DhcpMessageType::DISCOVER => write!(f, "discover"),
+            DhcpMessageType::OFFER => write!(f, "offer"),
+            DhcpMessageType::REQUEST => write!(f, "request"),
+            DhcpMessageType::DECLINE => write!(f, "decline"),
+            DhcpMessageType::ACK => write!(f, "ack"),
+            DhcpMessageType::NAK => write!(f, "nak"),
+            DhcpMessageType::RELEASE => write!(f, "release"),
+            DhcpMessageType::INFORM => write!(f, "inform"),
         }
     }
 }
@@ -1005,7 +1005,7 @@ mod tests {
         let display_str = format!("{}", dhcp);
 
         assert!(
-            display_str.contains("BOOTREQUEST"),
+            display_str.contains("bootrequest"),
             "Display string: {}",
             display_str
         );

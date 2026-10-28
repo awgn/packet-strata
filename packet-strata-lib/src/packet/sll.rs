@@ -143,14 +143,14 @@ impl From<u16> for SllPacketType {
 impl Display for SllPacketType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            SllPacketType::Host => write!(f, "Host"),
-            SllPacketType::Broadcast => write!(f, "Broadcast"),
-            SllPacketType::Multicast => write!(f, "Multicast"),
-            SllPacketType::OtherHost => write!(f, "OtherHost"),
-            SllPacketType::Outgoing => write!(f, "Outgoing"),
-            SllPacketType::LoopbackOutgoing => write!(f, "LoopbackOutgoing"),
-            SllPacketType::FastRoute => write!(f, "FastRoute"),
-            SllPacketType::Unknown(v) => write!(f, "Unknown({})", v),
+            SllPacketType::Host => write!(f, "host"),
+            SllPacketType::Broadcast => write!(f, "broadcast"),
+            SllPacketType::Multicast => write!(f, "multicast"),
+            SllPacketType::OtherHost => write!(f, "other-host"),
+            SllPacketType::Outgoing => write!(f, "outgoing"),
+            SllPacketType::LoopbackOutgoing => write!(f, "loopback-outgoing"),
+            SllPacketType::FastRoute => write!(f, "fast-route"),
+            SllPacketType::Unknown(v) => write!(f, "unknown({})", v),
         }
     }
 }
@@ -189,12 +189,12 @@ impl From<u16> for ArphrdType {
 impl Display for ArphrdType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            ArphrdType::Ether => write!(f, "Ethernet"),
-            ArphrdType::Ieee80211 => write!(f, "IEEE802.11"),
-            ArphrdType::Ieee80211Radiotap => write!(f, "IEEE802.11+Radiotap"),
-            ArphrdType::Loopback => write!(f, "Loopback"),
-            ArphrdType::Ppp => write!(f, "PPP"),
-            ArphrdType::Unknown(v) => write!(f, "Unknown({})", v),
+            ArphrdType::Ether => write!(f, "ethernet"),
+            ArphrdType::Ieee80211 => write!(f, "ieee802.11"),
+            ArphrdType::Ieee80211Radiotap => write!(f, "ieee802.11-radiotap"),
+            ArphrdType::Loopback => write!(f, "loopback"),
+            ArphrdType::Ppp => write!(f, "ppp"),
+            ArphrdType::Unknown(v) => write!(f, "unknown({})", v),
         }
     }
 }
@@ -590,8 +590,8 @@ mod tests {
         let display = format!("{}", header);
 
         assert!(display.contains("SLL"));
-        assert!(display.contains("Host"));
-        assert!(display.contains("Ethernet"));
+        assert!(display.contains("host"));
+        assert!(display.contains("ethernet"));
         assert!(display.contains("aa:bb:cc:dd:ee:ff"));
     }
 
@@ -612,26 +612,26 @@ mod tests {
 
         assert!(display.contains("SLLv2"));
         assert!(display.contains("if=3"));
-        assert!(display.contains("Host"));
+        assert!(display.contains("host"));
         assert!(display.contains("11:22:33:44:55:66"));
     }
 
     #[test]
     fn test_packet_type_display() {
-        assert_eq!(format!("{}", SllPacketType::Host), "Host");
-        assert_eq!(format!("{}", SllPacketType::Broadcast), "Broadcast");
-        assert_eq!(format!("{}", SllPacketType::Multicast), "Multicast");
-        assert_eq!(format!("{}", SllPacketType::OtherHost), "OtherHost");
-        assert_eq!(format!("{}", SllPacketType::Outgoing), "Outgoing");
-        assert_eq!(format!("{}", SllPacketType::Unknown(99)), "Unknown(99)");
+        assert_eq!(format!("{}", SllPacketType::Host), "host");
+        assert_eq!(format!("{}", SllPacketType::Broadcast), "broadcast");
+        assert_eq!(format!("{}", SllPacketType::Multicast), "multicast");
+        assert_eq!(format!("{}", SllPacketType::OtherHost), "other-host");
+        assert_eq!(format!("{}", SllPacketType::Outgoing), "outgoing");
+        assert_eq!(format!("{}", SllPacketType::Unknown(99)), "unknown(99)");
     }
 
     #[test]
     fn test_arphrd_type_display() {
-        assert_eq!(format!("{}", ArphrdType::Ether), "Ethernet");
-        assert_eq!(format!("{}", ArphrdType::Loopback), "Loopback");
-        assert_eq!(format!("{}", ArphrdType::Ieee80211), "IEEE802.11");
-        assert_eq!(format!("{}", ArphrdType::Unknown(999)), "Unknown(999)");
+        assert_eq!(format!("{}", ArphrdType::Ether), "ethernet");
+        assert_eq!(format!("{}", ArphrdType::Loopback), "loopback");
+        assert_eq!(format!("{}", ArphrdType::Ieee80211), "ieee802.11");
+        assert_eq!(format!("{}", ArphrdType::Unknown(999)), "unknown(999)");
     }
 
     #[test]

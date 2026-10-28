@@ -142,10 +142,7 @@ impl Icmp6Type {
     pub const fn is_error(self) -> bool {
         matches!(
             self,
-            Self::DST_UNREACH
-                | Self::PACKET_TOO_BIG
-                | Self::TIME_EXCEEDED
-                | Self::PARAM_PROB
+            Self::DST_UNREACH | Self::PACKET_TOO_BIG | Self::TIME_EXCEEDED | Self::PARAM_PROB
         )
     }
 }
