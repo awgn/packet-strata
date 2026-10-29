@@ -389,6 +389,65 @@ impl fmt::Display for Ipv4HeaderOpt<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Ethernet + IPv4 + TCP frame with `total_length` saying `declared_total`.
+    fn build_frame(declared_total: u16, tcp_header_len: usize, payload: &[u8]) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        f.extend_from_slice(&[0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb]);
+        f.extend_from_slice(&[0x08, 0x00]);
+        f.push(0x45);
+        f.push(0x00);
+        f.extend_from_slice(&declared_total.to_be_bytes());
+        f.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        f.push(64);
+        f.push(6);
+        f.extend_from_slice(&[0x00, 0x00]);
+        f.extend_from_slice(&[192, 168, 1, 1]);
+        f.extend_from_slice(&[192, 168, 1, 2]);
+        let mut tcp = vec![0u8; tcp_header_len];
+        tcp[0..2].copy_from_slice(&80u16.to_be_bytes());
+        tcp[2..4].copy_from_slice(&443u16.to_be_bytes());
+        tcp[12] = 0x50; // data offset 5
+        f.extend_from_slice(&tcp);
+        f.extend_from_slice(payload);
+        f
+    }
+
+    #[test]
+    fn test_payload_excludes_link_layer_padding() {
+        // Ethernet pads every frame shorter than 60 bytes, so a bare ACK or SYN/ACK
+        // arrives with trailing bytes belonging to no protocol. They must not reach the
+        // classifiers as payload: seeing two bytes of padding is enough to derail the
+        // ones that inspect the first bytes.
+        let mut frame = build_frame(40, 20, &[]); // 20 IPv4 + 20 TCP, no payload
+        frame.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // padding
+
+        let pkt = crate::packet::Packet::from_bytes(
+            &frame,
+            crate::packet::iter::LinkType::Ethernet,
+            crate::packet::ParseMode::Innermost,
+        )
+        .expect("frame must parse");
+        assert!(
+            pkt.data().is_empty(),
+            "the 6 padding bytes must not be payload, got {:?}",
+            pkt.data()
+        );
+    }
+
+    #[test]
+    fn test_payload_keeps_data_and_stops_at_declared_length() {
+        // A snapshot-truncated capture declares more than it holds: keep what is there.
+        let frame = build_frame(1500, 20, b"0123456789");
+        let pkt = crate::packet::Packet::from_bytes(
+            &frame,
+            crate::packet::iter::LinkType::Ethernet,
+            crate::packet::ParseMode::Innermost,
+        )
+        .expect("frame must parse");
+        assert_eq!(pkt.data(), b"0123456789");
+    }
+
     #[test]
     fn test_ipv4_header_size() {
         assert_eq!(std::mem::size_of::<Ipv4Header>(), 20);

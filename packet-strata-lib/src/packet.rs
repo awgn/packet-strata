@@ -235,6 +235,48 @@ impl<'a> Packet<'a> {
         Self::from_bytes_non_ipv4(link, ether_proto, remaining, mode)
     }
 
+    /// Bounds a payload slice to the length the IP header declares.
+    ///
+    /// A capture buffer holds whatever the link layer delivered: Ethernet pads every
+    /// frame shorter than 60 bytes, so a bare ACK or SYN/ACK arrives with a few
+    /// trailing bytes that belong to no protocol at all. Handing them to the upper
+    /// layers as payload makes a 0-byte segment look like a 2-byte one, which is
+    /// enough to derail anything that inspects the first bytes: the HTTP classifier
+    /// gave up on a SYN/ACK's padding and was already offloaded when the real
+    /// request arrived.
+    ///
+    /// `remaining` is the IP payload the transport header was parsed from and `rest`
+    /// the bytes after it, so their difference is the header length already consumed.
+    /// A zero or sub-header declared length (segmentation offload, malformed packet)
+    /// leaves the slice untouched rather than inventing a length.
+    #[inline(always)]
+    fn clamp_to_ip_length<'b>(
+        net: &NetworkLayer<'_>,
+        remaining: &[u8],
+        rest: &'b [u8],
+    ) -> &'b [u8] {
+        let declared = match net {
+            NetworkLayer::Ipv4(ipv4) => {
+                let header_len = ipv4.header.ihl() as usize * 4;
+                let total = ipv4.header.total_length();
+                if total < header_len {
+                    return rest;
+                }
+                total - header_len
+            }
+            NetworkLayer::Ipv6(ipv6) => {
+                let payload_len = ipv6.header.payload_length();
+                if payload_len == 0 {
+                    return rest;
+                }
+                payload_len
+            }
+            _ => return rest,
+        };
+        let consumed = remaining.len().saturating_sub(rest.len());
+        &rest[..rest.len().min(declared.saturating_sub(consumed))]
+    }
+
     #[inline(always)]
     fn parse_transport_fast(
         link: LinkLayer<'a>,
@@ -257,25 +299,27 @@ impl<'a> Packet<'a> {
                     mode,
                 );
             }
+            let payload = Self::clamp_to_ip_length(&net, remaining, rest);
             return Ok(Packet {
                 link,
                 arp: None,
                 network: Some(net),
                 transport: Some(TransportLayer::Tcp(tcp)),
                 tunnel: SmallVec::new(),
-                data: rest,
+                data: payload,
             });
         }
 
         if ip_proto == IpProto::SCTP {
             let (sctp, rest) = SctpHeader::from_bytes(remaining)?;
+            let payload = Self::clamp_to_ip_length(&net, remaining, rest);
             return Ok(Packet {
                 link,
                 arp: None,
                 network: Some(net),
                 transport: Some(TransportLayer::Sctp(sctp)),
                 tunnel: SmallVec::new(),
-                data: rest,
+                data: payload,
             });
         }
 
@@ -293,37 +337,40 @@ impl<'a> Packet<'a> {
                     );
                 }
             }
+            let payload = Self::clamp_to_ip_length(&net, remaining, rest);
             return Ok(Packet {
                 link,
                 arp: None,
                 network: Some(net),
                 transport: Some(TransportLayer::Udp(udp)),
                 tunnel: SmallVec::new(),
-                data: rest,
+                data: payload,
             });
         }
 
         if ip_proto == IpProto::ICMP {
             let (icmp, rest) = IcmpHeader::from_bytes(remaining)?;
+            let payload = Self::clamp_to_ip_length(&net, remaining, rest);
             return Ok(Packet {
                 link,
                 arp: None,
                 network: Some(net),
                 transport: Some(TransportLayer::Icmp(icmp)),
                 tunnel: SmallVec::new(),
-                data: rest,
+                data: payload,
             });
         }
 
         if ip_proto == IpProto::IPV6_ICMP {
             let (icmp6, rest) = Icmp6Header::from_bytes(remaining)?;
+            let payload = Self::clamp_to_ip_length(&net, remaining, rest);
             return Ok(Packet {
                 link,
                 arp: None,
                 network: Some(net),
                 transport: Some(TransportLayer::Icmp6(icmp6)),
                 tunnel: SmallVec::new(),
-                data: rest,
+                data: payload,
             });
         }
 
@@ -351,13 +398,14 @@ impl<'a> Packet<'a> {
             }
         }
 
+        let payload = Self::clamp_to_ip_length(&net, remaining, remaining);
         Ok(Packet {
             link,
             arp: None,
             network: Some(net),
             transport: None,
             tunnel: SmallVec::new(),
-            data: remaining,
+            data: payload,
         })
     }
 
