@@ -141,11 +141,14 @@ fn extract_vni_slow(
     network_tunnel_layers: &[NetworkTunnelLayer<'_>],
     vni_mapper: &mut VniMapper,
 ) -> Option<VniId> {
-    let vni_stack = network_tunnel_layers
+    let vni_stack: SmallVec<[VniLayer; 4]> = network_tunnel_layers
         .iter()
-        .map(TryInto::try_into)
-        .collect::<Result<SmallVec<[VniLayer; 4]>, _>>()
-        .ok()?;
+        .filter_map(|t| VniLayer::try_from(t).ok())
+        .collect();
+
+    if vni_stack.is_empty() {
+        return Some(VniId::default());
+    }
 
     Some(vni_mapper.get_or_create_vni_id(&vni_stack))
 }

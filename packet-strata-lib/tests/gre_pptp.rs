@@ -356,4 +356,22 @@ fn test_pppoe_qinq_detunneling() {
         }
         other => panic!("Expected inner TCP, got {:?}", other),
     }
+
+    let mut vni_mapper = packet_strata::tracker::vni::VniMapper::new();
+    let tuple = packet_strata::tracker::tuple::TupleV4::new(&packet, &mut vni_mapper)
+        .expect("Expected TupleV4 creation to succeed over PPPoE/PPP");
+    assert_eq!(tuple.src_ip, Ipv4Addr::new(2, 2, 2, 2));
+    assert_eq!(tuple.dst_ip, Ipv4Addr::new(1, 1, 1, 1));
+    assert_eq!(tuple.src_port, 443);
+    assert_eq!(tuple.dst_port, 20394);
+    assert!(tuple.vni.as_u32() > 0);
+
+    let pkt1 = Packet::from_bytes(&GRE_PPTP_PKT1, LinkType::Ethernet, ParseMode::Innermost).unwrap();
+    let tuple_pptp = packet_strata::tracker::tuple::TupleV4::new(&pkt1, &mut vni_mapper)
+        .expect("Expected TupleV4 creation to succeed over PPTP/PPP");
+    assert_eq!(tuple_pptp.src_ip, Ipv4Addr::new(172, 16, 44, 3));
+    assert_eq!(tuple_pptp.dst_ip, Ipv4Addr::new(8, 8, 8, 8));
+    assert_eq!(tuple_pptp.src_port, 40768);
+    assert_eq!(tuple_pptp.dst_port, 53);
+    assert!(tuple_pptp.vni.as_u32() > 0);
 }
