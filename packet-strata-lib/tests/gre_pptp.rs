@@ -262,9 +262,12 @@ fn test_gre_pptp_pkt2_full_parse_detunneling() {
 
 #[test]
 fn test_gre_pptp_iter_detunneling() {
-    for (idx, raw) in [(&GRE_PPTP_PKT1[..], 71usize), (&GRE_PPTP_PKT2[..], 146usize)]
-        .into_iter()
-        .enumerate()
+    for (idx, raw) in [
+        (&GRE_PPTP_PKT1[..], 71usize),
+        (&GRE_PPTP_PKT2[..], 146usize),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let (pkt, expected_dns_len) = raw;
         let mut iter = PacketIter::new(pkt, LinkType::Ethernet);

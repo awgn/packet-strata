@@ -149,7 +149,8 @@ impl PppHeader {
             return Err(PacketHeaderError::TooShort("PppHeader"));
         };
 
-        let header_len = (if hdlc_framing { 2 } else { 0 }) + (if compressed_proto { 1 } else { 2 });
+        let header_len =
+            (if hdlc_framing { 2 } else { 0 }) + (if compressed_proto { 1 } else { 2 });
 
         Ok((
             Self {
