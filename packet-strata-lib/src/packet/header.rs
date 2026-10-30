@@ -27,6 +27,8 @@ use super::tunnel::l2tp::{L2tpv2HeaderOpt, L2tpv3SessionHeaderCookie};
 use super::tunnel::mpls::MplsLabelStack;
 use super::tunnel::nvgre::NvgreHeader;
 use super::tunnel::pbb::PbbHeader;
+use super::tunnel::ppp::PppHeader;
+use super::tunnel::pppoe::PppoeHeader;
 use super::tunnel::pptp::PptpGreHeaderOpt;
 use super::tunnel::stt::SttPacket;
 use super::tunnel::teredo::TeredoPacket;
@@ -135,6 +137,12 @@ pub enum Header<'a> {
     /// PPTP GRE header with options
     Pptp(PptpGreHeaderOpt<'a>),
 
+    /// PPPoE header (Discovery or Session stage)
+    Pppoe(&'a PppoeHeader),
+
+    /// PPP header (Point-to-Point Protocol)
+    Ppp(PppHeader),
+
     /// IP-in-IP tunnel (IPIP, SIT, IP4in6, IP6Tnl)
     Ipip(IpipTunnel<'a>),
 
@@ -178,6 +186,8 @@ impl<'a> Header<'a> {
             Header::Pbb(_) => "PBB",
             Header::Stt(_) => "STT",
             Header::Pptp(_) => "PPTP",
+            Header::Pppoe(_) => "PPPoE",
+            Header::Ppp(_) => "PPP",
             Header::Ipip(t) => t.name(),
             Header::Unknown { .. } => "Unknown",
         }
@@ -221,6 +231,8 @@ impl<'a> Header<'a> {
                 | Header::Pbb(_)
                 | Header::Stt(_)
                 | Header::Pptp(_)
+                | Header::Pppoe(_)
+                | Header::Ppp(_)
                 | Header::Ipip(_)
         )
     }
@@ -259,6 +271,8 @@ impl std::fmt::Debug for Header<'_> {
             Header::Pbb(h) => f.debug_tuple("Pbb").field(h).finish(),
             Header::Stt(h) => f.debug_tuple("Stt").field(h).finish(),
             Header::Pptp(h) => f.debug_tuple("Pptp").field(h).finish(),
+            Header::Pppoe(h) => f.debug_tuple("Pppoe").field(h).finish(),
+            Header::Ppp(h) => f.debug_tuple("Ppp").field(h).finish(),
             Header::Ipip(h) => f.debug_tuple("Ipip").field(h).finish(),
             Header::Unknown { proto, data } => f
                 .debug_struct("Unknown")
@@ -297,6 +311,8 @@ impl std::fmt::Display for Header<'_> {
             Header::Pbb(h) => write!(f, "{}", h),
             Header::Stt(h) => write!(f, "{}", h),
             Header::Pptp(h) => write!(f, "{}", h),
+            Header::Pppoe(h) => write!(f, "{}", h),
+            Header::Ppp(h) => write!(f, "{}", h),
             Header::Ipip(t) => write!(f, "{}", t),
             Header::Unknown { proto, data } => {
                 write!(f, "Unknown({}, {} bytes)", proto, data.len())
@@ -625,6 +641,8 @@ pub enum TunnelLayer<'a> {
     Pbb(PbbHeader<'a>),
     Stt(SttPacket<'a>),
     Pptp(PptpGreHeaderOpt<'a>),
+    Pppoe(&'a PppoeHeader),
+    Ppp(PppHeader),
     Ipip(IpipTunnel<'a>),
 }
 
@@ -726,6 +744,8 @@ impl std::fmt::Display for TunnelLayer<'_> {
             TunnelLayer::Pbb(h) => write!(f, "{}", h),
             TunnelLayer::Stt(h) => write!(f, "{}", h),
             TunnelLayer::Pptp(h) => write!(f, "{}", h),
+            TunnelLayer::Pppoe(h) => write!(f, "{}", h),
+            TunnelLayer::Ppp(h) => write!(f, "{}", h),
             TunnelLayer::Ipip(h) => write!(f, "{}", h),
         }
     }

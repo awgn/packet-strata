@@ -59,6 +59,10 @@ pub(crate) enum TunnelType {
     Stt,
     /// PPTP tunnel (detected from GRE version 1)
     Pptp,
+    /// PPPoE tunnel (detected from EtherType 0x8863 Discovery or 0x8864 Session)
+    Pppoe,
+    /// PPP encapsulation (detected from EtherProto::PPP 0x880B, PPPoE Session, or L2TPv2 Data)
+    Ppp,
 }
 
 /// Detect tunnel type from UDP ports

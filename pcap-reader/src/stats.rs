@@ -68,6 +68,8 @@ pub struct LocalStats {
     pub pbb: u64,
     pub stt: u64,
     pub pptp: u64,
+    pub pppoe: u64,
+    pub ppp: u64,
     // IP-in-IP tunnels
     pub ipip: u64,
     pub sit: u64,
@@ -136,6 +138,8 @@ impl LocalStats {
         flush_counter!(pbb);
         flush_counter!(stt);
         flush_counter!(pptp);
+        flush_counter!(pppoe);
+        flush_counter!(ppp);
         flush_counter!(ipip);
         flush_counter!(sit);
         flush_counter!(ip4in6);
@@ -205,6 +209,8 @@ pub struct Stats {
     pub pbb: AtomicU64,
     pub stt: AtomicU64,
     pub pptp: AtomicU64,
+    pub pppoe: AtomicU64,
+    pub ppp: AtomicU64,
     // IP-in-IP tunnels
     pub ipip: AtomicU64,
     pub sit: AtomicU64,
@@ -253,6 +259,8 @@ impl Stats {
             + self.get(&self.pbb)
             + self.get(&self.stt)
             + self.get(&self.pptp)
+            + self.get(&self.pppoe)
+            + self.get(&self.ppp)
             + self.get(&self.ipip)
             + self.get(&self.sit)
             + self.get(&self.ip4in6)
@@ -371,6 +379,12 @@ impl Display for Stats {
             }
             if self.get(&self.pptp) > 0 {
                 writeln!(f, "  PPTP: {}", self.get(&self.pptp))?;
+            }
+            if self.get(&self.pppoe) > 0 {
+                writeln!(f, "  PPPoE: {}", self.get(&self.pppoe))?;
+            }
+            if self.get(&self.ppp) > 0 {
+                writeln!(f, "  PPP: {}", self.get(&self.ppp))?;
             }
             if self.get(&self.ipip) > 0 {
                 writeln!(f, "  IPIP (IPv4-in-IPv4): {}", self.get(&self.ipip))?;

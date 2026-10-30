@@ -67,6 +67,7 @@ crate::protocol_constants! {
         IPV6 = 0x86DD;
         PAUSE = 0x8808;
         SLOW = 0x8809;
+        PPP = 0x880B;
         WCCP = 0x883E;
         MPLS_UC = 0x8847;
         MPLS_MC = 0x8848;

@@ -71,6 +71,8 @@ fn record_header_stats(header: Header<'_>, local_stats: &mut LocalStats) {
         Header::Pbb(_) => local_stats.pbb += 1,
         Header::Stt(_) => local_stats.stt += 1,
         Header::Pptp(_) => local_stats.pptp += 1,
+        Header::Pppoe(_) => local_stats.pppoe += 1,
+        Header::Ppp(_) => local_stats.ppp += 1,
         Header::Ipip(tunnel) => match tunnel.tunnel_type() {
             IpipType::Ipip => local_stats.ipip += 1,
             IpipType::Sit => local_stats.sit += 1,
@@ -233,6 +235,8 @@ fn record_full_packet_stats(packet: &Packet<'_>, local_stats: &mut LocalStats) {
             TunnelLayer::Pbb(_) => local_stats.pbb += 1,
             TunnelLayer::Stt(_) => local_stats.stt += 1,
             TunnelLayer::Pptp(_) => local_stats.pptp += 1,
+            TunnelLayer::Pppoe(_) => local_stats.pppoe += 1,
+            TunnelLayer::Ppp(_) => local_stats.ppp += 1,
             TunnelLayer::Ipip(tunnel) => match tunnel.tunnel_type() {
                 IpipType::Ipip => local_stats.ipip += 1,
                 IpipType::Sit => local_stats.sit += 1,

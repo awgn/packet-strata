@@ -133,6 +133,8 @@ use super::tunnel::l2tp::{L2tpv2Header, L2tpv3SessionHeader};
 use super::tunnel::mpls::MplsLabelStack;
 use super::tunnel::nvgre::NvgreHeader;
 use super::tunnel::pbb::PbbHeader;
+use super::tunnel::ppp::PppHeader;
+use super::tunnel::pppoe::PppoeHeader;
 use super::tunnel::pptp::PptpGreHeader;
 use super::tunnel::stt::SttPacket;
 use super::tunnel::teredo::TeredoPacket;
@@ -502,6 +504,14 @@ impl<'a> PacketIter<'a> {
                 // 0x88E7 = I-Tag (802.1ah), 0x88A8 = B-Tag (802.1ad)
                 self.parse_tunnel(TunnelType::Pbb)
             }
+            EtherProto::PPP_DISC | EtherProto::PPP_SES => {
+                // PPPoE Discovery (0x8863) or Session (0x8864)
+                self.parse_tunnel(TunnelType::Pppoe)
+            }
+            EtherProto::PPP | EtherProto::WAN_PPP | EtherProto::PPP_MP => {
+                // PPP encapsulation (0x880B, 0x0007, 0x0008)
+                self.parse_tunnel(TunnelType::Ppp)
+            }
             _ => {
                 // Unknown network protocol
                 let header = Header::Unknown {
@@ -667,12 +677,13 @@ impl<'a> PacketIter<'a> {
             TunnelType::Gre => match GreHeader::from_bytes(self.remaining) {
                 Ok((gre, rest)) => {
                     let inner_proto = gre.protocol_type();
-                    self.remaining = rest;
 
                     // Check if this is NVGRE (Ethernet over GRE) or standard GRE
                     if inner_proto == EtherProto::TEB {
+                        self.remaining = rest;
                         self.next_layer = NextLayer::Link(LinkType::Ethernet);
                     } else {
+                        self.remaining = rest;
                         self.next_layer = NextLayer::Network(inner_proto);
                     }
                     Some(Ok(Header::Gre(gre)))
@@ -755,11 +766,22 @@ impl<'a> PacketIter<'a> {
             },
             TunnelType::L2tpv2 => match L2tpv2Header::from_bytes(self.remaining) {
                 Ok((l2tpv2, rest)) => {
-                    self.remaining = rest;
-                    // L2TPv2 data messages encapsulate PPP frames
-                    // Control messages don't have inner payload to parse
-                    // For now, we stop parsing as PPP parsing is not implemented
-                    self.next_layer = NextLayer::Done;
+                    if l2tpv2.is_data() {
+                        let ppp_buf = match l2tpv2.offset_size() {
+                            Some(off) if rest.len() >= off as usize => &rest[off as usize..],
+                            Some(_) => &[],
+                            None => rest,
+                        };
+                        self.remaining = ppp_buf;
+                        self.next_layer = if ppp_buf.is_empty() {
+                            NextLayer::Done
+                        } else {
+                            NextLayer::Tunnel(TunnelType::Ppp)
+                        };
+                    } else {
+                        self.remaining = rest;
+                        self.next_layer = NextLayer::Done;
+                    }
                     Some(Ok(Header::L2tpv2(l2tpv2)))
                 }
                 Err(e) => {
@@ -840,10 +862,46 @@ impl<'a> PacketIter<'a> {
             TunnelType::Pptp => match PptpGreHeader::from_bytes(self.remaining) {
                 Ok((pptp, rest)) => {
                     self.remaining = rest;
-                    // PPTP encapsulates PPP frames
-                    // PPP parsing is not implemented, so we stop here
-                    self.next_layer = NextLayer::Done;
+                    if pptp.payload_length() > 0 && !rest.is_empty() {
+                        self.next_layer = NextLayer::Network(pptp.protocol_type());
+                    } else {
+                        self.next_layer = NextLayer::Done;
+                    }
                     Some(Ok(Header::Pptp(pptp)))
+                }
+                Err(e) => {
+                    self.next_layer = NextLayer::Done;
+                    Some(Err(e))
+                }
+            },
+            TunnelType::Pppoe => match PppoeHeader::from_bytes(self.remaining) {
+                Ok((pppoe, rest)) => {
+                    self.remaining = rest;
+                    if pppoe.is_session_data() && !rest.is_empty() {
+                        self.next_layer = NextLayer::Tunnel(TunnelType::Ppp);
+                    } else {
+                        self.next_layer = NextLayer::Done;
+                    }
+                    Some(Ok(Header::Pppoe(pppoe)))
+                }
+                Err(e) => {
+                    self.next_layer = NextLayer::Done;
+                    Some(Err(e))
+                }
+            },
+            TunnelType::Ppp => match PppHeader::from_bytes(self.remaining) {
+                Ok((ppp, rest)) => {
+                    self.remaining = rest;
+                    if !rest.is_empty() {
+                        if let Some(proto) = ppp.inner_ether_proto() {
+                            self.next_layer = NextLayer::Network(proto);
+                        } else {
+                            self.next_layer = NextLayer::Done;
+                        }
+                    } else {
+                        self.next_layer = NextLayer::Done;
+                    }
+                    Some(Ok(Header::Ppp(ppp)))
                 }
                 Err(e) => {
                     self.next_layer = NextLayer::Done;

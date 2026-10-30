@@ -185,6 +185,11 @@ pub enum VniLayer {
         call_id: u16,
         endpoints: [IpAddr; 2],
     },
+
+    /// Point-to-Point Protocol over Ethernet (RFC 2516)
+    ///
+    /// Layer 2 access tunnel. Contains 16-bit Session ID.
+    Pppoe { session_id: u16 },
 }
 
 impl fmt::Display for VniLayer {
@@ -303,6 +308,9 @@ impl fmt::Display for VniLayer {
                     call_id, endpoints[0], endpoints[1]
                 )
             }
+            Self::Pppoe { session_id } => {
+                write!(f, "pppoe(sid:0x{:04x})", session_id)
+            }
         }
     }
 }
@@ -401,6 +409,20 @@ impl TryFrom<&NetworkTunnelLayer<'_>> for VniLayer {
                 call_id: pptp.header.call_id(),
                 endpoints,
             }),
+            TunnelLayer::Pppoe(pppoe) => {
+                // PPPoE is a Layer 2 tunnel (no outer IP endpoints)
+                if pppoe.is_session_data() {
+                    Ok(VniLayer::Pppoe {
+                        session_id: pppoe.session_id(),
+                    })
+                } else {
+                    Err(())
+                }
+            }
+            TunnelLayer::Ppp(_) => {
+                // PPP framing has no session/tunnel identifier of its own
+                Err(())
+            }
             TunnelLayer::Ipip(ipip) => {
                 // IPIP tunnels have access to outer IP headers embedded in the tunnel
                 match ipip.outer_header() {

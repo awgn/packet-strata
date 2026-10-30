@@ -32,6 +32,8 @@ use crate::packet::{
         mpls::MplsLabelStack,
         nvgre::NvgreHeader,
         pbb::PbbHeader,
+        ppp::PppHeader,
+        pppoe::PppoeHeader,
         pptp::PptpGreHeader,
         stt::SttPacket,
         teredo::TeredoPacket,
@@ -467,7 +469,12 @@ impl<'a> Packet<'a> {
             | EtherProto::MPLS_MC
             | EtherProto::TEB
             | EtherProto::VLAN_8021AH
-            | EtherProto::VLAN_8021AD => Self::from_bytes_tunnel(
+            | EtherProto::VLAN_8021AD
+            | EtherProto::PPP_DISC
+            | EtherProto::PPP_SES
+            | EtherProto::PPP
+            | EtherProto::WAN_PPP
+            | EtherProto::PPP_MP => Self::from_bytes_tunnel(
                 link,
                 None,
                 None,
@@ -754,6 +761,20 @@ impl<'a> Packet<'a> {
                     buf,
                 ))
             }
+            EtherProto::PPP_DISC | EtherProto::PPP_SES => {
+                // PPPoE Discovery (0x8863) or Session (0x8864)
+                Ok(NetworkResult::Tunnel(
+                    NextLayer::Tunnel(TunnelType::Pppoe),
+                    buf,
+                ))
+            }
+            EtherProto::PPP | EtherProto::WAN_PPP | EtherProto::PPP_MP => {
+                // PPP encapsulation (0x880B, 0x0007, 0x0008)
+                Ok(NetworkResult::Tunnel(
+                    NextLayer::Tunnel(TunnelType::Ppp),
+                    buf,
+                ))
+            }
             _ => {
                 // Unknown network protocol - stop parsing
                 Ok(NetworkResult::Done(buf))
@@ -902,7 +923,9 @@ impl<'a> Packet<'a> {
             TunnelType::Gre => {
                 let (gre, rest) = GreHeader::from_bytes(buf)?;
                 let inner_proto = gre.protocol_type();
-                let next = if inner_proto == EtherProto::TEB {
+                let next = if rest.is_empty() {
+                    NextLayer::Done
+                } else if inner_proto == EtherProto::TEB {
                     NextLayer::Link(LinkType::Ethernet)
                 } else {
                     NextLayer::Network(inner_proto)
@@ -945,7 +968,22 @@ impl<'a> Packet<'a> {
             }
             TunnelType::L2tpv2 => {
                 let (l2tpv2, rest) = L2tpv2Header::from_bytes(buf)?;
-                Ok((TunnelLayer::L2tpv2(l2tpv2), NextLayer::Done, rest))
+                let (next, inner) = if l2tpv2.is_data() {
+                    let ppp_buf = match l2tpv2.offset_size() {
+                        Some(off) if rest.len() >= off as usize => &rest[off as usize..],
+                        Some(_) => &[],
+                        None => rest,
+                    };
+                    let next_layer = if ppp_buf.is_empty() {
+                        NextLayer::Done
+                    } else {
+                        NextLayer::Tunnel(TunnelType::Ppp)
+                    };
+                    (next_layer, ppp_buf)
+                } else {
+                    (NextLayer::Done, rest)
+                };
+                Ok((TunnelLayer::L2tpv2(l2tpv2), next, inner))
             }
             TunnelType::L2tpv3 => {
                 let (l2tpv3, rest) = L2tpv3SessionHeader::parse_with_cookie_len(buf, 0)?;
@@ -990,7 +1028,31 @@ impl<'a> Packet<'a> {
             },
             TunnelType::Pptp => {
                 let (pptp, rest) = PptpGreHeader::from_bytes(buf)?;
-                Ok((TunnelLayer::Pptp(pptp), NextLayer::Done, rest))
+                let next = if pptp.payload_length() > 0 && !rest.is_empty() {
+                    NextLayer::Network(pptp.protocol_type())
+                } else {
+                    NextLayer::Done
+                };
+                Ok((TunnelLayer::Pptp(pptp), next, rest))
+            }
+            TunnelType::Pppoe => {
+                let (pppoe, rest) = PppoeHeader::from_bytes(buf)?;
+                let next = if pppoe.is_session_data() && !rest.is_empty() {
+                    NextLayer::Tunnel(TunnelType::Ppp)
+                } else {
+                    NextLayer::Done
+                };
+                Ok((TunnelLayer::Pppoe(pppoe), next, rest))
+            }
+            TunnelType::Ppp => {
+                let (ppp, rest) = PppHeader::from_bytes(buf)?;
+                let next = if !rest.is_empty() {
+                    ppp.inner_ether_proto()
+                        .map_or(NextLayer::Done, NextLayer::Network)
+                } else {
+                    NextLayer::Done
+                };
+                Ok((TunnelLayer::Ppp(ppp), next, rest))
             }
         }
     }

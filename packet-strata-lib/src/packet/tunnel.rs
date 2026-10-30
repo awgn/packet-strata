@@ -109,6 +109,8 @@ pub mod l2tp;
 pub mod mpls;
 pub mod nvgre;
 pub mod pbb;
+pub mod ppp;
+pub mod pppoe;
 pub mod pptp;
 pub mod stt;
 pub mod teredo;
