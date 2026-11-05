@@ -10,7 +10,7 @@ use crate::packet::{
         detect_gre_variant, detect_mpls_inner_protocol, detect_udp_tunnel,
         find_ipv6_upper_protocol, is_stt_port, NextLayer, TunnelType,
     },
-    ether::EtherHeader,
+    ether::{EtherHeader, EtherHeaderVlan},
     header::{LinkLayer, NetworkLayer, NetworkTunnelLayer, TransportLayer, TunnelLayer},
     icmp::IcmpHeader,
     icmp6::Icmp6Header,
@@ -661,12 +661,36 @@ impl<'a> Packet<'a> {
                 let next_proto = null.protocol();
                 Ok((LinkLayer::Null(null), next_proto, rest))
             }
-            LinkType::RawIpv4 => Err(PacketHeaderError::Other(
-                "RawIpv4 requires special handling",
-            )),
-            LinkType::RawIpv6 => Err(PacketHeaderError::Other(
-                "RawIpv6 requires special handling",
-            )),
+            LinkType::RawIpv4 => {
+                if buf.first().is_some_and(|b| (b >> 4) == 6) {
+                    Ok((
+                        LinkLayer::Ethernet(EtherHeaderVlan::Standard(&EtherHeader::RAW_IPV6)),
+                        EtherProto::IPV6,
+                        buf,
+                    ))
+                } else {
+                    Ok((
+                        LinkLayer::Ethernet(EtherHeaderVlan::Standard(&EtherHeader::RAW_IPV4)),
+                        EtherProto::IPV4,
+                        buf,
+                    ))
+                }
+            }
+            LinkType::RawIpv6 => {
+                if buf.first().is_some_and(|b| (b >> 4) == 4) {
+                    Ok((
+                        LinkLayer::Ethernet(EtherHeaderVlan::Standard(&EtherHeader::RAW_IPV4)),
+                        EtherProto::IPV4,
+                        buf,
+                    ))
+                } else {
+                    Ok((
+                        LinkLayer::Ethernet(EtherHeaderVlan::Standard(&EtherHeader::RAW_IPV6)),
+                        EtherProto::IPV6,
+                        buf,
+                    ))
+                }
+            }
         }
     }
 
@@ -1282,5 +1306,73 @@ mod tests {
             display.contains("VXLAN"),
             "Display should show VXLAN tunnel"
         );
+    }
+
+    #[test]
+    fn test_raw_ipv4_packet_from_bytes() {
+        let raw_ipv4_udp: [u8; 40] = [
+            0x45, 0x00, 0x00, 0x28, 0x76, 0xc4, 0x40, 0x00, 0x3f, 0x11, 0xa8, 0xca, 0x0a, 0x0b,
+            0x02, 0x04, 0x08, 0x08, 0x08, 0x08, // IPv4 10.11.2.4 -> 8.8.8.8
+            0xf4, 0x4d, 0x00, 0x35, 0x00, 0x14, 0x00, 0x00, // UDP 62541 -> 53, len 20
+            0x93, 0xef, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 12B payload
+        ];
+
+        let lt = crate::packet::iter::PacketIter::guess_link_type(&raw_ipv4_udp);
+        assert_eq!(lt, LinkType::RawIpv4);
+
+        let pkt = Packet::from_bytes(&raw_ipv4_udp, lt, ParseMode::Innermost)
+            .expect("Should parse RawIpv4 packet");
+
+        assert_eq!(pkt.link().source().to_string(), "00:00:00:00:00:00");
+        assert_eq!(pkt.link().dest().to_string(), "00:00:00:00:00:00");
+        assert_eq!(pkt.link().protocol(), EtherProto::IPV4);
+
+        match pkt.network() {
+            Some(NetworkLayer::Ipv4(ipv4)) => {
+                assert_eq!(ipv4.src_ip().to_string(), "10.11.2.4");
+                assert_eq!(ipv4.dst_ip().to_string(), "8.8.8.8");
+            }
+            other => panic!("Expected IPv4 network layer, got {:?}", other),
+        }
+
+        match pkt.transport() {
+            Some(TransportLayer::Udp(udp)) => {
+                assert_eq!(udp.src_port(), 0xf44d);
+                assert_eq!(udp.dst_port(), 53);
+            }
+            other => panic!("Expected UDP transport layer, got {:?}", other),
+        }
+
+        assert_eq!(pkt.data().len(), 12);
+    }
+
+    #[test]
+    fn test_raw_ipv6_packet_from_bytes() {
+        let mut raw_ipv6_udp = Vec::new();
+        // IPv6 header (40 bytes): version 6, payload len 8 (UDP header), next header 17 (UDP), hop limit 64
+        raw_ipv6_udp.extend_from_slice(&[0x60, 0x00, 0x00, 0x00]);
+        raw_ipv6_udp.extend_from_slice(&8u16.to_be_bytes());
+        raw_ipv6_udp.push(17);
+        raw_ipv6_udp.push(64);
+        raw_ipv6_udp.extend_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        raw_ipv6_udp.extend_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
+        // UDP header (8 bytes)
+        raw_ipv6_udp.extend_from_slice(&1234u16.to_be_bytes());
+        raw_ipv6_udp.extend_from_slice(&5678u16.to_be_bytes());
+        raw_ipv6_udp.extend_from_slice(&8u16.to_be_bytes());
+        raw_ipv6_udp.extend_from_slice(&0u16.to_be_bytes());
+
+        let lt = crate::packet::iter::PacketIter::guess_link_type(&raw_ipv6_udp);
+        assert_eq!(lt, LinkType::RawIpv6);
+
+        let pkt = Packet::from_bytes(&raw_ipv6_udp, lt, ParseMode::Innermost)
+            .expect("Should parse RawIpv6 packet");
+
+        assert_eq!(pkt.link().source().to_string(), "00:00:00:00:00:00");
+        assert_eq!(pkt.link().dest().to_string(), "00:00:00:00:00:00");
+        assert_eq!(pkt.link().protocol(), EtherProto::IPV6);
+        assert!(matches!(pkt.network(), Some(NetworkLayer::Ipv6(_))));
+        assert!(matches!(pkt.transport(), Some(TransportLayer::Udp(_))));
+        assert!(pkt.data().is_empty());
     }
 }

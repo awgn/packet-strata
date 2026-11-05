@@ -176,6 +176,20 @@ pub struct EtherHeader {
 }
 
 impl EtherHeader {
+    /// Synthetic zero-MAC Ethernet header for raw IPv4 captures (`DLT_RAW`).
+    pub const RAW_IPV4: EtherHeader = EtherHeader {
+        dest: EthAddr([0; ETH_ALEN]),
+        source: EthAddr([0; ETH_ALEN]),
+        proto: EtherProto::IPV4,
+    };
+
+    /// Synthetic zero-MAC Ethernet header for raw IPv6 captures (`DLT_RAW`).
+    pub const RAW_IPV6: EtherHeader = EtherHeader {
+        dest: EthAddr([0; ETH_ALEN]),
+        source: EthAddr([0; ETH_ALEN]),
+        proto: EtherProto::IPV6,
+    };
+
     #[inline(always)]
     pub fn dest(&self) -> &EthAddr {
         &self.dest

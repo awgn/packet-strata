@@ -193,8 +193,20 @@ impl<'a> PacketIter<'a> {
     #[inline(always)]
     pub fn new(buf: &'a [u8], link_type: LinkType) -> Self {
         let next_layer = match link_type {
-            LinkType::RawIpv4 => NextLayer::Network(EtherProto::IPV4),
-            LinkType::RawIpv6 => NextLayer::Network(EtherProto::IPV6),
+            LinkType::RawIpv4 => {
+                if buf.first().is_some_and(|b| (b >> 4) == 6) {
+                    NextLayer::Network(EtherProto::IPV6)
+                } else {
+                    NextLayer::Network(EtherProto::IPV4)
+                }
+            }
+            LinkType::RawIpv6 => {
+                if buf.first().is_some_and(|b| (b >> 4) == 4) {
+                    NextLayer::Network(EtherProto::IPV4)
+                } else {
+                    NextLayer::Network(EtherProto::IPV6)
+                }
+            }
             _ => NextLayer::Link(link_type),
         };
         Self {
@@ -219,23 +231,6 @@ impl<'a> PacketIter<'a> {
             return LinkType::Ethernet;
         }
 
-        // Fast path: Check for raw IP (most common in tunnels/VPNs)
-        // IPv4: version = 4 in high nibble (0x4X), IHL >= 5 in low nibble
-        // IPv6: version = 6 in high nibble (0x6X)
-        let first_byte = buf[0];
-        let version = first_byte >> 4;
-
-        if version == 4 {
-            // Likely IPv4: check IHL is valid (5-15)
-            let ihl = first_byte & 0x0F;
-            if (5..=15).contains(&ihl) {
-                return LinkType::RawIpv4;
-            }
-        } else if version == 6 {
-            // Likely IPv6
-            return LinkType::RawIpv6;
-        }
-
         // Check for Null/Loopback (4 bytes AF_* in host byte order)
         if buf.len() >= 4 {
             let le_val = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
@@ -255,18 +250,46 @@ impl<'a> PacketIter<'a> {
             }
         }
 
-        // Check for Ethernet (14 byte header, EtherType at 12-13)
+        // Check for Ethernet (14 byte header, EtherType at 12-13) before Raw IP so that
+        // Ethernet frames whose destination MAC starts with 0x4x or 0x6x are not misidentified.
         if buf.len() >= 14 {
             let ether_type = u16::from_be_bytes([buf[12], buf[13]]);
 
             // Common EtherTypes: IPv4 (0x0800), IPv6 (0x86DD), ARP (0x0806), VLAN (0x8100, 0x88A8)
             // MPLS (0x8847, 0x8848), PPPoE (0x8863, 0x8864)
             match ether_type {
-                0x0800 | 0x86DD | 0x0806 | 0x8100 | 0x88A8 | 0x8847 | 0x8848 | 0x8863 | 0x8864 => {
+                0x0800
+                    if buf.len() < 15
+                        || ((buf[14] >> 4) == 4 && (5..=15).contains(&(buf[14] & 0x0F))) =>
+                {
+                    return LinkType::Ethernet;
+                }
+                0x86DD if buf.len() < 15 || (buf[14] >> 4) == 6 => {
+                    return LinkType::Ethernet;
+                }
+                0x0806 | 0x8035 | 0x8100 | 0x88A8 | 0x88E7 | 0x8847 | 0x8848 | 0x8863 | 0x8864
+                | 0x88A4 | 0x88AB => {
                     return LinkType::Ethernet;
                 }
                 _ => {}
             }
+        }
+
+        // Fast path: Check for raw IP (most common in tunnels/VPNs)
+        // IPv4: version = 4 in high nibble (0x4X), IHL >= 5 in low nibble
+        // IPv6: version = 6 in high nibble (0x6X)
+        let first_byte = buf[0];
+        let version = first_byte >> 4;
+
+        if version == 4 {
+            // Likely IPv4: check IHL is valid (5-15)
+            let ihl = first_byte & 0x0F;
+            if (5..=15).contains(&ihl) {
+                return LinkType::RawIpv4;
+            }
+        } else if version == 6 {
+            // Likely IPv6
+            return LinkType::RawIpv6;
         }
 
         // Check for SLL (16 bytes) - packet type at 0-1 should be 0-4
@@ -2371,6 +2394,18 @@ mod tests {
             0x45, 0x00, // IPv4 header
         ];
         assert_eq!(PacketIter::guess_link_type(&packet), LinkType::Ethernet);
+
+        // Ethernet frame whose Dest MAC starts with 0x45 or 0x60 must still be detected as Ethernet
+        let packet_45_mac = vec![
+            0x45, 0x11, 0x22, 0x33, 0x44, 0x55, // Dest MAC starting with 0x45
+            0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, // Src MAC
+            0x08, 0x00, // EtherType: IPv4
+            0x45, 0x00, // IPv4 header
+        ];
+        assert_eq!(
+            PacketIter::guess_link_type(&packet_45_mac),
+            LinkType::Ethernet
+        );
     }
 
     #[test]
