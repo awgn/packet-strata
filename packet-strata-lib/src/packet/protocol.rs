@@ -1,42 +1,194 @@
-//! IP Protocol Numbers
+//! Ethernet EtherTypes and IANA IP Protocol Numbers
 //!
-//! This module defines IP protocol numbers as specified in RFC 1700 and maintained
-//! by IANA. These protocol numbers are used in IPv4 headers (Protocol field) and
-//! IPv6 headers (Next Header field).
+//! This module defines IEEE 802.3 / Linux SLL protocol identifiers ([`EtherProto`]) and IANA IP
+//! protocol numbers ([`IpProto`]) used in Ethernet, SLL, IPv4 (`Protocol`), and IPv6 (`Next Header`)
+//! headers, along with zero-allocation symbolic `kebab-case` formatting ([`ProtoName`]) and
+//! [`std::str::FromStr`] parsing.
 //!
 //! # Examples
 //!
 //! ```
-//! use packet_strata::packet::protocol::IpProto;
+//! use packet_strata::packet::protocol::{EtherProto, IpProto};
 //!
 //! // Common protocols
 //! let tcp = IpProto::TCP;
 //! let udp = IpProto::UDP;
-//! let icmp = IpProto::ICMP;
 //!
-//! // IPv6 extension headers
-//! let hop_by_hop = IpProto::IPV6_HOPOPT;
-//! let routing = IpProto::IPV6_ROUTE;
-//! let fragment = IpProto::IPV6_FRAG;
-//!
-//! // Display protocol names
-//! assert_eq!(format!("{}", tcp), "tcp");
+//! // Zero-allocation static str & Display
+//! assert_eq!(tcp.as_str(), Some("tcp"));
 //! assert_eq!(format!("{}", udp), "udp");
 //! assert_eq!(format!("{}", IpProto::IPV6_ICMP), "ipv6-icmp");
+//! assert_eq!(EtherProto::PROFINET.as_str(), Some("profinet"));
+//! assert_eq!(EtherProto::IEEE_802_3.as_str(), Some("ieee-802-3"));
 //!
-//! // Convert from/to u8
-//! let proto = IpProto::from(6);
-//! assert_eq!(proto, IpProto::TCP);
-//! let value: u8 = IpProto::UDP.into();
-//! assert_eq!(value, 17);
-//!
-//! // Check if protocol is valid/known
-//! assert!(IpProto::TCP.is_valid());
-//! assert!(IpProto::UDP.is_valid());
-//! assert!(!IpProto::from(200).is_valid());
+//! // Parse from symbolic name, alias, hex, or decimal
+//! assert_eq!("tcp".parse::<IpProto>().unwrap(), IpProto::TCP);
+//! assert_eq!("icmp6".parse::<IpProto>().unwrap(), IpProto::IPV6_ICMP);
+//! assert_eq!("6".parse::<IpProto>().unwrap(), IpProto::TCP);
+//! assert_eq!("0x0806".parse::<EtherProto>().unwrap(), EtherProto::ARP);
 //! ```
 
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::ops::Deref;
+
+use smol_str::SmolStr;
+use thiserror::Error;
 use zerocopy::{BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, U16};
+
+/// Error returned when parsing an [`IpProto`] or [`EtherProto`] from a string fails.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("unknown protocol: {0}")]
+pub struct ParseProtoError(pub SmolStr);
+
+/// Zero-allocation, `Copy` symbolic representation of an [`IpProto`] or [`EtherProto`].
+///
+/// Holds either a `'static` `kebab-case` protocol name (e.g. `"tcp"`, `"ipv6-icmp"`, `"arp"`,
+/// `"ieee-802-3"`) or a stack-formatted lowercase hexadecimal fallback (`"0xc8"`, `"0x9999"`).
+#[derive(Clone, Copy)]
+pub enum ProtoName {
+    Static(&'static str),
+    Hex { buf: [u8; 6], len: u8 },
+}
+
+#[inline(always)]
+const fn hex_digit(nibble: u8) -> u8 {
+    let n = nibble & 0x0f;
+    if n < 10 {
+        b'0' + n
+    } else {
+        b'a' + (n - 10)
+    }
+}
+
+impl ProtoName {
+    /// Empty static protocol name (`""`), useful for absent L4 protocols on pure Layer-2 flows.
+    pub const EMPTY: Self = Self::Static("");
+
+    /// Wraps a `'static` protocol name with zero allocation.
+    #[inline(always)]
+    pub const fn from_static(s: &'static str) -> Self {
+        Self::Static(s)
+    }
+
+    /// Formats an unassigned `u8` protocol number as lowercase `"0x..."` on the stack (`"0x0".."0xff"`).
+    #[inline(always)]
+    pub const fn from_hex_u8(val: u8) -> Self {
+        if val < 0x10 {
+            Self::Hex {
+                buf: [b'0', b'x', hex_digit(val), 0, 0, 0],
+                len: 3,
+            }
+        } else {
+            Self::Hex {
+                buf: [b'0', b'x', hex_digit(val >> 4), hex_digit(val), 0, 0],
+                len: 4,
+            }
+        }
+    }
+
+    /// Formats an unmapped `u16` EtherType as 4-digit lowercase `"0xXXXX"` on the stack.
+    #[inline(always)]
+    pub const fn from_hex_u16(val: u16) -> Self {
+        Self::Hex {
+            buf: [
+                b'0',
+                b'x',
+                hex_digit((val >> 12) as u8),
+                hex_digit((val >> 8) as u8),
+                hex_digit((val >> 4) as u8),
+                hex_digit(val as u8),
+            ],
+            len: 6,
+        }
+    }
+
+    /// Returns the string slice representation of this protocol name.
+    #[inline(always)]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Static(s) => s,
+            Self::Hex { buf, len } => {
+                let slice = buf.get(..usize::from(*len)).unwrap_or(&[]);
+                std::str::from_utf8(slice).unwrap_or("")
+            }
+        }
+    }
+}
+
+impl Default for ProtoName {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
+impl Deref for ProtoName {
+    type Target = str;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for ProtoName {
+    #[inline(always)]
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl PartialEq for ProtoName {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for ProtoName {}
+
+impl PartialEq<str> for ProtoName {
+    #[inline(always)]
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for ProtoName {
+    #[inline(always)]
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl Hash for ProtoName {
+    #[inline(always)]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl fmt::Debug for ProtoName {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl fmt::Display for ProtoName {
+    #[inline(always)]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl serde::Serialize for ProtoName {
+    #[inline(always)]
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
 
 crate::protocol_constants! {
     EtherProto, U16<BigEndian>, u16:
@@ -77,18 +229,29 @@ crate::protocol_constants! {
         LINK_CTL = 0x886c;
         ATMFATE = 0x8884;
         PAE = 0x888E;
+        PROFINET = 0x8892;
         AOE = 0x88A2;
+        ETHERCAT = 0x88A4;
         VLAN_8021AD = 0x88A8;
+        POWERLINK = 0x88AB;
         IEEE_802_EX1 = 0x88B5;
+        GOOSE = 0x88B8;
+        SV = 0x88BA;
         TIPC = 0x88CA;
+        LLDP = 0x88CC;
+        MRP = 0x88E3;
+        MACSEC = 0x88E5;
         VLAN_8021AH = 0x88E7;
         MVRP = 0x88F5;
         IEEE_1588 = 0x88F7;
         PRP = 0x88FB;
+        CFM = 0x8902;
         FCOE = 0x8906;
         TDLS = 0x890D;
         FIP = 0x8914;
+        ROCE = 0x8915;
         IEEE_80221 = 0x8917;
+        HSR = 0x892F;
         LOOPBACK = 0x9000;
         QINQ1 = 0x9100;
         QINQ2 = 0x9200;
@@ -120,6 +283,31 @@ crate::protocol_constants! {
         PHONET = 0x00F5;
         IEEE802154 = 0x00F6;
         CAIF = 0x00F7;
+}
+
+impl EtherProto {
+    #[inline]
+    fn parse_alias(s: &str) -> Option<Self> {
+        if s.eq_ignore_ascii_case("ieee-802.3") || s.eq_ignore_ascii_case("802.3") {
+            Some(Self::IEEE_802_3)
+        } else if s.eq_ignore_ascii_case("vlan") {
+            Some(Self::VLAN_8021Q)
+        } else if s.eq_ignore_ascii_case("qinq") {
+            Some(Self::VLAN_8021AD)
+        } else if s.eq_ignore_ascii_case("mpls") {
+            Some(Self::MPLS_UC)
+        } else if s.eq_ignore_ascii_case("pppoe-discovery") {
+            Some(Self::PPP_DISC)
+        } else if s.eq_ignore_ascii_case("pppoe-session") {
+            Some(Self::PPP_SES)
+        } else if s.eq_ignore_ascii_case("eapol") {
+            Some(Self::PAE)
+        } else if s.eq_ignore_ascii_case("ptp") {
+            Some(Self::IEEE_1588)
+        } else {
+            None
+        }
+    }
 }
 
 crate::protocol_constants! {
@@ -264,6 +452,21 @@ crate::protocol_constants! {
         #[default] ANY = 255;
 }
 
+impl IpProto {
+    #[inline]
+    fn parse_alias(s: &str) -> Option<Self> {
+        if s.eq_ignore_ascii_case("icmp6") || s.eq_ignore_ascii_case("icmpv6") {
+            Some(Self::IPV6_ICMP)
+        } else if s.eq_ignore_ascii_case("ipip") || s.eq_ignore_ascii_case("ip-in-ip") {
+            Some(Self::IP_ENCAP)
+        } else if s.eq_ignore_ascii_case("hopopt") {
+            Some(Self::IPV6_HOPOPT)
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,7 +487,8 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_display() {
+    fn test_protocol_display_and_as_str() {
+        assert_eq!(IpProto::TCP.as_str(), Some("tcp"));
         assert_eq!(format!("{}", IpProto::TCP), "tcp");
         assert_eq!(format!("{}", IpProto::UDP), "udp");
         assert_eq!(format!("{}", IpProto::ICMP), "icmp");
@@ -295,12 +499,53 @@ mod tests {
         assert_eq!(format!("{}", IpProto::IPV6_NONXT), "ipv6-nonxt");
         assert_eq!(format!("{}", IpProto::_3PC), "3pc");
         assert_eq!(format!("{}", IpProto::ANY), "any");
+
+        assert_eq!(EtherProto::IPV4.as_str(), Some("ipv4"));
+        assert_eq!(EtherProto::IPV6.as_str(), Some("ipv6"));
+        assert_eq!(EtherProto::ARP.as_str(), Some("arp"));
+        assert_eq!(EtherProto::IEEE_802_3.as_str(), Some("ieee-802-3"));
+        assert_eq!(EtherProto::CAN.as_str(), Some("can"));
+        assert_eq!(EtherProto::WAN_PPP.as_str(), Some("wan-ppp"));
+        assert_eq!(EtherProto::PROFINET.as_str(), Some("profinet"));
+        assert_eq!(EtherProto::ETHERCAT.as_str(), Some("ethercat"));
+        assert_eq!(EtherProto::POWERLINK.as_str(), Some("powerlink"));
+        assert_eq!(EtherProto::LLDP.as_str(), Some("lldp"));
+        assert_eq!(EtherProto::GOOSE.as_str(), Some("goose"));
+        assert_eq!(EtherProto::from(0x9999u16).as_str(), None);
+        assert_eq!(EtherProto::from(0x9999u16).proto_name(), "0x9999");
     }
 
     #[test]
     fn test_protocol_display_unknown() {
         let unknown = IpProto(200);
+        assert_eq!(unknown.as_str(), None);
         assert_eq!(format!("{}", unknown), "0xc8");
+        assert_eq!(IpProto(5).as_str(), Some("st"));
+        assert_eq!(format!("{}", IpProto(48)), "0x30");
+    }
+
+    #[test]
+    fn test_protocol_from_str() {
+        assert_eq!("tcp".parse::<IpProto>().unwrap(), IpProto::TCP);
+        assert_eq!("TCP".parse::<IpProto>().unwrap(), IpProto::TCP);
+        assert_eq!("ipv6-icmp".parse::<IpProto>().unwrap(), IpProto::IPV6_ICMP);
+        assert_eq!("icmp6".parse::<IpProto>().unwrap(), IpProto::IPV6_ICMP);
+        assert_eq!("icmpv6".parse::<IpProto>().unwrap(), IpProto::IPV6_ICMP);
+        assert_eq!("ipip".parse::<IpProto>().unwrap(), IpProto::IP_ENCAP);
+        assert_eq!("3pc".parse::<IpProto>().unwrap(), IpProto::_3PC);
+        assert_eq!("6".parse::<IpProto>().unwrap(), IpProto::TCP);
+        assert_eq!("0xc8".parse::<IpProto>().unwrap(), IpProto(200));
+        assert!("not-a-proto".parse::<IpProto>().is_err());
+
+        assert_eq!("ipv4".parse::<EtherProto>().unwrap(), EtherProto::IPV4);
+        assert_eq!("ARP".parse::<EtherProto>().unwrap(), EtherProto::ARP);
+        assert_eq!("profinet".parse::<EtherProto>().unwrap(), EtherProto::PROFINET);
+        assert_eq!("ieee-802-3".parse::<EtherProto>().unwrap(), EtherProto::IEEE_802_3);
+        assert_eq!("ieee-802.3".parse::<EtherProto>().unwrap(), EtherProto::IEEE_802_3);
+        assert_eq!("vlan".parse::<EtherProto>().unwrap(), EtherProto::VLAN_8021Q);
+        assert_eq!("2048".parse::<EtherProto>().unwrap(), EtherProto::IPV4);
+        assert_eq!("0x9999".parse::<EtherProto>().unwrap(), EtherProto::from(0x9999u16));
+        assert!("not-an-ethertype".parse::<EtherProto>().is_err());
     }
 
     #[test]
@@ -330,7 +575,6 @@ mod tests {
 
     #[test]
     fn test_protocol_is_valid() {
-        // Known protocols should be valid
         assert!(IpProto::TCP.is_valid());
         assert!(IpProto::UDP.is_valid());
         assert!(IpProto::ICMP.is_valid());
@@ -339,12 +583,72 @@ mod tests {
         assert!(IpProto::IPV6_ROUTE.is_valid());
         assert!(IpProto::IPV6_FRAG.is_valid());
         assert!(IpProto::ANY.is_valid());
+        assert!(EtherProto::CAN.is_valid());
+        assert!(EtherProto::WAN_PPP.is_valid());
+        assert!(EtherProto::IEEE_802_3.is_valid());
 
-        // Unknown protocols should be invalid
         assert!(!IpProto::from(200).is_valid());
         assert!(!IpProto::from(150).is_valid());
-        assert!(!IpProto::from(48).is_valid()); // Gap in protocol numbers
-        assert!(!IpProto::from(61).is_valid()); // Gap in protocol numbers
+        assert!(!IpProto::from(48).is_valid());
+        assert!(!IpProto::from(61).is_valid());
         assert!(!IpProto::from(254).is_valid());
+    }
+
+    #[cfg(feature = "strata_protocol_names")]
+    #[test]
+    fn test_strata_protocol_names_serde_json() {
+        assert_eq!(serde_json::to_string(&IpProto::TCP).unwrap(), "\"tcp\"");
+        assert_eq!(
+            serde_json::to_string(&IpProto::IPV6_ICMP).unwrap(),
+            "\"ipv6-icmp\""
+        );
+        assert_eq!(serde_json::to_string(&IpProto(200)).unwrap(), "\"0xc8\"");
+        assert_eq!(
+            serde_json::to_string(&EtherProto::IPV4).unwrap(),
+            "\"ipv4\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EtherProto::PROFINET).unwrap(),
+            "\"profinet\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EtherProto::IEEE_802_3).unwrap(),
+            "\"ieee-802-3\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EtherProto::CAN).unwrap(),
+            "\"can\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EtherProto::from(0x9999u16)).unwrap(),
+            "\"0x9999\""
+        );
+
+        // Deserialize from symbolic string, alias, hex, and legacy integer
+        assert_eq!(
+            serde_json::from_str::<IpProto>("\"tcp\"").unwrap(),
+            IpProto::TCP
+        );
+        assert_eq!(
+            serde_json::from_str::<IpProto>("\"icmp6\"").unwrap(),
+            IpProto::IPV6_ICMP
+        );
+        assert_eq!(serde_json::from_str::<IpProto>("6").unwrap(), IpProto::TCP);
+        assert_eq!(
+            serde_json::from_str::<IpProto>("\"0xc8\"").unwrap(),
+            IpProto(200)
+        );
+        assert_eq!(
+            serde_json::from_str::<EtherProto>("\"arp\"").unwrap(),
+            EtherProto::ARP
+        );
+        assert_eq!(
+            serde_json::from_str::<EtherProto>("2048").unwrap(),
+            EtherProto::IPV4
+        );
+        assert_eq!(
+            serde_json::from_str::<EtherProto>("\"ieee-802-3\"").unwrap(),
+            EtherProto::IEEE_802_3
+        );
     }
 }

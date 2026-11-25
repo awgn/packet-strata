@@ -167,6 +167,15 @@ impl TryFrom<String> for EthAddr {
     }
 }
 
+#[inline(always)]
+fn normalize_ether_proto(proto: EtherProto) -> EtherProto {
+    if proto.0.get() < EtherProto::IEEE_802_3_MIN.0.get() {
+        EtherProto::IEEE_802_3
+    } else {
+        proto
+    }
+}
+
 #[repr(C, packed)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct EtherHeader {
@@ -200,8 +209,16 @@ impl EtherHeader {
         &self.source
     }
 
+    /// Returns the Ethernet protocol, normalizing IEEE 802.3 length values (`< 0x0600`)
+    /// to [`EtherProto::IEEE_802_3`].
     #[inline(always)]
     pub fn protocol(&self) -> EtherProto {
+        normalize_ether_proto(self.proto)
+    }
+
+    /// Returns the raw 16-bit Type/Length field from the Ethernet header without normalization.
+    #[inline(always)]
+    pub fn raw_protocol(&self) -> EtherProto {
         self.proto
     }
 
@@ -240,7 +257,7 @@ impl PacketHeader for EtherHeaderFixed {
 
     #[inline(always)]
     fn inner_type(&self) -> Self::InnerType {
-        self.0.proto
+        self.0.protocol()
     }
 }
 
@@ -259,7 +276,7 @@ impl PacketHeader for EtherHeader {
 
     #[inline(always)]
     fn inner_type(&self) -> Self::InnerType {
-        self.proto
+        self.protocol()
     }
 }
 
@@ -309,6 +326,19 @@ impl Ether8021qHeader {
     pub fn vlan_dei(&self) -> bool {
         ((self.tci.get() >> 12) & 0x01) != 0
     }
+
+    /// Returns the encapsulated protocol after the 802.1Q tag, normalizing IEEE 802.3
+    /// length values (`< 0x0600`) to [`EtherProto::IEEE_802_3`].
+    #[inline(always)]
+    pub fn protocol(&self) -> EtherProto {
+        normalize_ether_proto(self.proto)
+    }
+
+    /// Returns the raw 16-bit Type/Length field inside the 802.1Q tag without normalization.
+    #[inline(always)]
+    pub fn raw_protocol(&self) -> EtherProto {
+        self.proto
+    }
 }
 
 impl Display for Ether8021qHeader {
@@ -319,7 +349,7 @@ impl Display for Ether8021qHeader {
             self.vlan_id(),
             self.vlan_pcp(),
             self.vlan_dei(),
-            self.proto
+            self.protocol()
         )
     }
 }
@@ -330,7 +360,7 @@ impl PacketHeader for Ether8021qHeader {
 
     #[inline(always)]
     fn inner_type(&self) -> Self::InnerType {
-        self.proto
+        self.protocol()
     }
 }
 
@@ -357,21 +387,30 @@ impl Display for EtherHeaderVlan<'_> {
                 write!(
                     f,
                     "Ethernet {} -> {} proto={}",
-                    eth.source, eth.dest, eth.proto
+                    eth.source,
+                    eth.dest,
+                    eth.protocol()
                 )
             }
             EtherHeaderVlan::VLAN8021Q(eth, vlan) => {
                 write!(
                     f,
                     "Ethernet {} -> {} proto={} [{}]",
-                    eth.source, eth.dest, eth.proto, vlan
+                    eth.source,
+                    eth.dest,
+                    eth.protocol(),
+                    vlan
                 )
             }
             EtherHeaderVlan::VLAN8021QNested(eth, vlan1, vlan2) => {
                 write!(
                     f,
                     "Ethernet {} -> {} proto={} [{}] [{}]",
-                    eth.source, eth.dest, eth.proto, vlan1, vlan2
+                    eth.source,
+                    eth.dest,
+                    eth.protocol(),
+                    vlan1,
+                    vlan2
                 )
             }
         }
@@ -413,9 +452,9 @@ impl<'a> EtherHeaderVlan<'a> {
     #[inline(always)]
     pub fn inner_type(&self) -> EtherProto {
         match self {
-            EtherHeaderVlan::Standard(eth) => eth.proto,
-            EtherHeaderVlan::VLAN8021Q(_, vlan) => vlan.proto,
-            EtherHeaderVlan::VLAN8021QNested(_, _, vlan) => vlan.proto,
+            EtherHeaderVlan::Standard(eth) => eth.protocol(),
+            EtherHeaderVlan::VLAN8021Q(_, vlan) => vlan.protocol(),
+            EtherHeaderVlan::VLAN8021QNested(_, _, vlan) => vlan.protocol(),
         }
     }
 }
@@ -521,5 +560,23 @@ mod tests {
             }
             _ => panic!("Expected VLAN8021Q variant"),
         }
+    }
+
+    #[test]
+    fn test_ether_header_ieee_802_3_length_normalized() {
+        let packet_bytes: [u8; 20] = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // dest MAC (broadcast)
+            0x8c, 0x7a, 0x3d, 0x2a, 0xdb, 0xe6, // source MAC
+            0x00, 0x06, // IEEE 802.3 payload length = 6 bytes (< 0x0600)
+            0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, // 6-byte LLC payload
+        ];
+
+        let (eth, remaining) =
+            EtherHeader::from_bytes(&packet_bytes).expect("Failed to parse 802.3 EtherHeader");
+        assert_eq!(eth.protocol(), EtherProto::IEEE_802_3);
+        assert_eq!(eth.inner_type(), EtherProto::IEEE_802_3);
+        assert_eq!(eth.raw_protocol(), EtherProto::from(6u16));
+        assert_eq!(eth.protocol().to_string(), "ieee-802-3");
+        assert_eq!(remaining.len(), 6);
     }
 }

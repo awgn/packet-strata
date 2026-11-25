@@ -663,6 +663,6 @@ mod tests {
 
         assert_eq!(header.arphrd_type(), ArphrdType::Loopback);
         assert_eq!(header.ll_addr_len(), 0);
-        assert_eq!(header.ll_addr(), &[]);
+        assert!(header.ll_addr().is_empty());
     }
 }

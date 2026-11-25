@@ -448,7 +448,7 @@ impl fmt::Display for IcmpHeader {
             IcmpType::DEST_UNREACH => {
                 let code = IcmpCodeUnreachable::from(self.code());
                 write!(f, " code={}", code)?;
-                if self.code() == IcmpCodeUnreachable::FRAG_NEEDED.into() {
+                if code == IcmpCodeUnreachable::FRAG_NEEDED {
                     write!(f, " mtu={}", self.frag_mtu())?;
                 }
             }
