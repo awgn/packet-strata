@@ -1146,8 +1146,8 @@ impl<'a> Packet<'a> {
             }
             _ => match &self.link {
                 LinkLayer::Ethernet(eth) => hash_eth_3tuple(
-                    eth.source().as_bytes(),
-                    eth.dest().as_bytes(),
+                    &eth.source().octets(),
+                    &eth.dest().octets(),
                     eth.inner_type(),
                 ),
                 _ => fmix64(self.data.len() as u64),
@@ -1197,7 +1197,7 @@ impl<'a> Packet<'a> {
         while let Some(res) = iter.next() {
             match res {
                 Ok(Header::Ethernet(eth)) => {
-                    last_eth = Some((*eth.source().as_bytes(), *eth.dest().as_bytes(), eth.inner_type()));
+                    last_eth = Some((eth.source().octets(), eth.dest().octets(), eth.inner_type()));
                 }
                 Ok(Header::Ipv4(ipv4)) => {
                     last_net = LastNet::V4(

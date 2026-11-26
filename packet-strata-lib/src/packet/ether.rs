@@ -121,8 +121,8 @@ impl Default for EthAddr {
 impl EthAddr {
     /// Returns the raw 6-byte Ethernet MAC address.
     #[inline(always)]
-    pub const fn as_bytes(&self) -> &[u8; ETH_ALEN] {
-        &self.0
+    pub const fn octets(&self) -> [u8; ETH_ALEN] {
+        self.0
     }
 }
 
