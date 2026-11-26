@@ -1112,6 +1112,208 @@ impl<'a> Packet<'a> {
     pub fn data(&self) -> &'a [u8] {
         self.data
     }
+
+    /// Computes a fast, bidirectional (symmetric) 64-bit flow steering hash from this
+    /// already-parsed packet so both directions (`A -> B` and `B -> A`) hash identically.
+    ///
+    /// - For IPv4 and IPv6 packets, hashes the canonical 5-tuple `(src_ip, dst_ip, upper_proto, src_port, dst_port)`
+    ///   (reflecting innermost headers when parsed with [`ParseMode::Innermost`], and resolving
+    ///   IPv6 extension headers via [`Ipv6HeaderExt::upper_protocol`](ipv6::Ipv6HeaderExt::upper_protocol)).
+    /// - For non-IP Ethernet frames (e.g. ARP, LLDP, PROFINET), hashes the canonical L2 3-tuple
+    ///   `(src_mac, dst_mac, ether_type)`.
+    #[inline(always)]
+    pub fn symmetric_hash(&self) -> u64 {
+        match &self.network {
+            Some(NetworkLayer::Ipv4(ipv4)) => {
+                let (sp, dp) = self.transport.as_ref().map(|t| t.ports()).unwrap_or((0, 0));
+                hash_ipv4_5tuple(
+                    ipv4.src_ip().octets(),
+                    ipv4.dst_ip().octets(),
+                    ipv4.protocol(),
+                    sp,
+                    dp,
+                )
+            }
+            Some(NetworkLayer::Ipv6(ipv6)) => {
+                let (sp, dp) = self.transport.as_ref().map(|t| t.ports()).unwrap_or((0, 0));
+                hash_ipv6_5tuple(
+                    ipv6.src_ip().octets(),
+                    ipv6.dst_ip().octets(),
+                    ipv6.upper_protocol(),
+                    sp,
+                    dp,
+                )
+            }
+            _ => match &self.link {
+                LinkLayer::Ethernet(eth) => hash_eth_3tuple(
+                    eth.source().as_bytes(),
+                    eth.dest().as_bytes(),
+                    eth.inner_type(),
+                ),
+                _ => fmix64(self.data.len() as u64),
+            },
+        }
+    }
+
+    /// Computes a fast, bidirectional 64-bit flow steering hash directly from raw packet bytes
+    /// using the exact same [`LinkType`] and [`ParseMode`] semantics as [`Packet::from_bytes`].
+    ///
+    /// Guarantees steering consistency across all supported link layers, VLAN tags, IPv6
+    /// extension headers, and tunnels (VXLAN, Geneve, GRE, MPLS, GTP, Teredo, L2TP, PPPoE, IPIP).
+    /// Also handles snaplen-truncated packets where the L4 header is shorter than a full TCP/UDP
+    /// header but still contains the 4-byte port pair.
+    #[inline(always)]
+    pub fn steering_hash(buf: &[u8], link_type: LinkType, mode: ParseMode) -> u64 {
+        if let Ok(pkt) = Packet::from_bytes(buf, link_type, mode) {
+            return pkt.symmetric_hash();
+        }
+        Packet::steering_hash_truncated(buf, link_type, mode)
+    }
+
+    /// Convenience wrapper around [`Packet::steering_hash`] that resolves [`LinkType`] from an
+    /// optional libpcap/PCAPNG DLT via [`LinkType::from_dlt_or_guess`].
+    #[inline(always)]
+    pub fn steering_hash_with_dlt(buf: &[u8], dlt: Option<u32>, mode: ParseMode) -> u64 {
+        let lt = LinkType::from_dlt_or_guess(dlt, buf);
+        Packet::steering_hash(buf, lt, mode)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn steering_hash_truncated(buf: &[u8], link_type: LinkType, mode: ParseMode) -> u64 {
+        use crate::packet::iter::{Header, PacketIter};
+
+        enum LastNet {
+            None,
+            V4([u8; 4], [u8; 4], IpProto),
+            V6([u8; 16], [u8; 16], IpProto),
+        }
+
+        let mut iter = PacketIter::new(buf, link_type);
+        let mut last_eth: Option<([u8; 6], [u8; 6], EtherProto)> = None;
+        let mut last_net = LastNet::None;
+        let mut last_ports: Option<(u16, u16)> = None;
+
+        while let Some(res) = iter.next() {
+            match res {
+                Ok(Header::Ethernet(eth)) => {
+                    last_eth = Some((*eth.source().as_bytes(), *eth.dest().as_bytes(), eth.inner_type()));
+                }
+                Ok(Header::Ipv4(ipv4)) => {
+                    last_net = LastNet::V4(
+                        ipv4.src_ip().octets(),
+                        ipv4.dst_ip().octets(),
+                        ipv4.protocol(),
+                    );
+                    last_ports = None;
+                }
+                Ok(Header::Ipv6(ipv6)) => {
+                    last_net = LastNet::V6(
+                        ipv6.src_ip().octets(),
+                        ipv6.dst_ip().octets(),
+                        ipv6.upper_protocol(),
+                    );
+                    last_ports = None;
+                }
+                Ok(Header::Tcp(tcp)) => {
+                    last_ports = Some((tcp.src_port(), tcp.dst_port()));
+                    if mode == ParseMode::Outermost {
+                        break;
+                    }
+                }
+                Ok(Header::Udp(udp)) => {
+                    last_ports = Some((udp.src_port(), udp.dst_port()));
+                    if mode == ParseMode::Outermost {
+                        break;
+                    }
+                }
+                Ok(Header::Sctp(sctp)) => {
+                    last_ports = Some((sctp.src_port(), sctp.dst_port()));
+                    if mode == ParseMode::Outermost {
+                        break;
+                    }
+                }
+                Ok(h) if mode == ParseMode::Outermost && h.is_tunnel() => break,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+
+        let extract_truncated_ports = |proto: IpProto, rem: &[u8]| -> (u16, u16) {
+            if matches!(proto, IpProto::TCP | IpProto::UDP | IpProto::SCTP) && rem.len() >= 4 {
+                (
+                    u16::from_be_bytes([rem[0], rem[1]]),
+                    u16::from_be_bytes([rem[2], rem[3]]),
+                )
+            } else {
+                (0, 0)
+            }
+        };
+
+        match last_net {
+            LastNet::V4(src, dst, proto) => {
+                let (sp, dp) =
+                    last_ports.unwrap_or_else(|| extract_truncated_ports(proto, iter.remaining()));
+                hash_ipv4_5tuple(src, dst, proto, sp, dp)
+            }
+            LastNet::V6(src, dst, proto) => {
+                let (sp, dp) =
+                    last_ports.unwrap_or_else(|| extract_truncated_ports(proto, iter.remaining()));
+                hash_ipv6_5tuple(src, dst, proto, sp, dp)
+            }
+            LastNet::None => {
+                if let Some((src, dst, proto)) = last_eth {
+                    hash_eth_3tuple(&src, &dst, proto)
+                } else {
+                    fmix64(buf.len() as u64)
+                }
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn fmix64(mut k: u64) -> u64 {
+    k ^= k >> 33;
+    k = k.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    k ^= k >> 33;
+    k = k.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    k ^ (k >> 33)
+}
+
+#[inline(always)]
+fn hash_ipv4_5tuple(src_ip: [u8; 4], dst_ip: [u8; 4], proto: IpProto, sp: u16, dp: u16) -> u64 {
+    let ep1 = ((u32::from_be_bytes(src_ip) as u64) << 16) | (sp as u64);
+    let ep2 = ((u32::from_be_bytes(dst_ip) as u64) << 16) | (dp as u64);
+    let (lo, hi) = if ep1 <= ep2 { (ep1, ep2) } else { (ep2, ep1) };
+    let h = fmix64(lo ^ ((u8::from(proto) as u64) << 48));
+    fmix64(h ^ hi.rotate_left(17))
+}
+
+#[inline(always)]
+fn hash_ipv6_5tuple(src_ip: [u8; 16], dst_ip: [u8; 16], proto: IpProto, sp: u16, dp: u16) -> u64 {
+    let s = u128::from_be_bytes(src_ip);
+    let d = u128::from_be_bytes(dst_ip);
+    let ((lo_ip, lo_p), (hi_ip, hi_p)) = if (s, sp) <= (d, dp) {
+        ((s, sp), (d, dp))
+    } else {
+        ((d, dp), (s, sp))
+    };
+    let h = fmix64((lo_ip as u64) ^ ((lo_ip >> 64) as u64).rotate_left(13));
+    let h = fmix64(h ^ (hi_ip as u64) ^ ((hi_ip >> 64) as u64).rotate_left(29));
+    let meta = ((lo_p as u64) << 16) | (hi_p as u64) | ((u8::from(proto) as u64) << 48);
+    fmix64(h ^ meta)
+}
+
+#[inline(always)]
+fn hash_eth_3tuple(src: &[u8; 6], dst: &[u8; 6], proto: EtherProto) -> u64 {
+    let s = ((u32::from_be_bytes([src[0], src[1], src[2], src[3]]) as u64) << 16)
+        | (u16::from_be_bytes([src[4], src[5]]) as u64);
+    let d = ((u32::from_be_bytes([dst[0], dst[1], dst[2], dst[3]]) as u64) << 16)
+        | (u16::from_be_bytes([dst[4], dst[5]]) as u64);
+    let (lo, hi) = if s <= d { (s, d) } else { (d, s) };
+    let h = fmix64(lo ^ ((u16::from(proto) as u64) << 48));
+    fmix64(h ^ hi.rotate_left(17))
 }
 
 impl<'a> fmt::Display for Packet<'a> {
@@ -1366,5 +1568,128 @@ mod tests {
         assert!(matches!(pkt.network(), Some(NetworkLayer::Ipv6(_))));
         assert!(matches!(pkt.transport(), Some(TransportLayer::Udp(_))));
         assert!(pkt.data().is_empty());
+    }
+
+    #[test]
+    fn test_steering_hash_symmetry_dlts_tunnels_ipv6_ext_and_truncated() {
+        // 1. DLT_RAW IPv4 whose src_ip bytes 12..15 mimic EtherType 0x0800 + 0x45
+        let raw_fwd: [u8; 28] = [
+            0x45, 0x00, 0x00, 0x1c, 0x00, 0x01, 0x00, 0x00, 64, 17, 0x00, 0x00, // IPv4 hdr
+            0x08, 0x00, 0x45, 0x01, // src = 8.0.69.1
+            10, 0, 0, 2, // dst = 10.0.0.2
+            0x13, 0x88, 0x00, 0x35, 0x00, 0x08, 0x00, 0x00, // UDP 5000 -> 53
+        ];
+        let raw_rev: [u8; 28] = [
+            0x45, 0x00, 0x00, 0x1c, 0x00, 0x02, 0x00, 0x00, 64, 17, 0x00, 0x00, // IPv4 hdr
+            10, 0, 0, 2, // src = 10.0.0.2
+            0x08, 0x00, 0x45, 0x01, // dst = 8.0.69.1
+            0x00, 0x35, 0x13, 0x88, 0x00, 0x08, 0x00, 0x00, // UDP 53 -> 5000
+        ];
+        let h_raw = Packet::steering_hash_with_dlt(&raw_fwd, Some(101), ParseMode::Innermost);
+        assert_eq!(
+            Packet::steering_hash_with_dlt(&raw_rev, Some(101), ParseMode::Innermost),
+            h_raw
+        );
+        assert_eq!(
+            Packet::steering_hash_with_dlt(&raw_fwd, Some(12), ParseMode::Innermost),
+            h_raw
+        );
+
+        // Equivalent Ethernet, Null, SLL, SLLv2, and truncated 4B-port frames all match
+        let mut eth = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 1, 2, 3, 4, 5, 6, 0x08, 0x00];
+        eth.extend_from_slice(&raw_fwd);
+        assert_eq!(
+            Packet::steering_hash_with_dlt(&eth, Some(1), ParseMode::Innermost),
+            h_raw
+        );
+
+        let mut null = vec![2u8, 0, 0, 0];
+        null.extend_from_slice(&raw_fwd);
+        assert_eq!(
+            Packet::steering_hash_with_dlt(&null, Some(0), ParseMode::Innermost),
+            h_raw
+        );
+
+        let mut sll = vec![0u8; 16];
+        sll[14..16].copy_from_slice(&0x0800u16.to_be_bytes());
+        sll.extend_from_slice(&raw_fwd);
+        assert_eq!(
+            Packet::steering_hash_with_dlt(&sll, Some(113), ParseMode::Innermost),
+            h_raw
+        );
+
+        let mut sll2 = vec![0u8; 20];
+        sll2[0..2].copy_from_slice(&0x0800u16.to_be_bytes());
+        sll2.extend_from_slice(&raw_fwd);
+        assert_eq!(
+            Packet::steering_hash_with_dlt(&sll2, Some(276), ParseMode::Innermost),
+            h_raw
+        );
+
+        // Snaplen-truncated packet (20B IPv4 + only 4B UDP ports) must still match!
+        assert_eq!(
+            Packet::steering_hash_with_dlt(&raw_fwd[..24], Some(101), ParseMode::Innermost),
+            h_raw
+        );
+
+        // 2. VXLAN tunnel with asymmetric outer UDP source ports hashes identically in Innermost mode
+        let build_vxlan = |outer_sp: u16, inner_ip: &[u8]| -> Vec<u8> {
+            let mut p = vec![
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0x08, 0x00,
+            ];
+            let udp_len = (8 + 8 + 14 + inner_ip.len()) as u16;
+            let ip_len = 20 + udp_len;
+            p.extend_from_slice(&[0x45, 0x00]);
+            p.extend_from_slice(&ip_len.to_be_bytes());
+            p.extend_from_slice(&[0, 1, 0, 0, 64, 17, 0, 0, 192, 168, 1, 1, 192, 168, 1, 2]);
+            p.extend_from_slice(&outer_sp.to_be_bytes());
+            p.extend_from_slice(&4789u16.to_be_bytes());
+            p.extend_from_slice(&udp_len.to_be_bytes());
+            p.extend_from_slice(&[0, 0]);
+            p.extend_from_slice(&[0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00]); // VXLAN VNI=100
+            p.extend_from_slice(&[1, 2, 3, 4, 5, 6, 6, 5, 4, 3, 2, 1, 0x08, 0x00]); // Inner Eth
+            p.extend_from_slice(inner_ip);
+            p
+        };
+        let vxlan_fwd = build_vxlan(51234, &raw_fwd);
+        let vxlan_rev = build_vxlan(60987, &raw_rev);
+        assert_eq!(
+            Packet::steering_hash(&vxlan_fwd, LinkType::Ethernet, ParseMode::Innermost),
+            h_raw
+        );
+        assert_eq!(
+            Packet::steering_hash(&vxlan_rev, LinkType::Ethernet, ParseMode::Innermost),
+            h_raw
+        );
+
+        // 3. IPv6 with asymmetric Hop-by-Hop extension header hashes identically in both directions
+        let a = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let b = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+        let mut v6_fwd = vec![0x60, 0x00, 0x00, 0x00, 0x00, 0x1c, 0, 64];
+        v6_fwd.extend_from_slice(&a);
+        v6_fwd.extend_from_slice(&b);
+        v6_fwd.extend_from_slice(&[6, 0, 0, 0, 0, 0, 0, 0]); // Hop-by-Hop -> TCP
+        v6_fwd.extend_from_slice(&50000u16.to_be_bytes());
+        v6_fwd.extend_from_slice(&443u16.to_be_bytes());
+        v6_fwd.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 0, 0x50, 0x02, 0x20, 0x00, 0, 0, 0, 0]);
+
+        let mut v6_rev = vec![0x60, 0x00, 0x00, 0x00, 0x00, 0x14, 6, 64];
+        v6_rev.extend_from_slice(&b);
+        v6_rev.extend_from_slice(&a);
+        v6_rev.extend_from_slice(&443u16.to_be_bytes());
+        v6_rev.extend_from_slice(&50000u16.to_be_bytes());
+        v6_rev.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 2, 0x50, 0x12, 0x20, 0x00, 0, 0, 0, 0]);
+
+        assert_eq!(
+            Packet::steering_hash_with_dlt(&v6_fwd, Some(101), ParseMode::Innermost),
+            Packet::steering_hash_with_dlt(&v6_rev, Some(229), ParseMode::Innermost)
+        );
+
+        // 4. Empty / short frames never panic
+        for dlt in [None, Some(0), Some(1), Some(101), Some(113), Some(276), Some(9999)] {
+            for sample in [&[][..], &[0x45][..], &[0u8; 10][..]] {
+                let _ = Packet::steering_hash_with_dlt(sample, dlt, ParseMode::Innermost);
+            }
+        }
     }
 }

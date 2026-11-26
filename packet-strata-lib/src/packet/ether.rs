@@ -118,6 +118,14 @@ impl Default for EthAddr {
     }
 }
 
+impl EthAddr {
+    /// Returns the raw 6-byte Ethernet MAC address.
+    #[inline(always)]
+    pub const fn as_bytes(&self) -> &[u8; ETH_ALEN] {
+        &self.0
+    }
+}
+
 impl Display for EthAddr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
