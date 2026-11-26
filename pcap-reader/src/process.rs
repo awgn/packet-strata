@@ -14,7 +14,7 @@ use packet_strata::metadata::PacketMetadata;
 #[inline(always)]
 pub fn process_packet<'a, Pkt: PacketMetadata>(
     _pkt_count: u64,
-    link_type: &mut Option<LinkType>,
+    dlt: Option<u32>,
     pkt: &'a Pkt,
     local_stats: &mut LocalStats,
     stats: &Stats,
@@ -24,7 +24,7 @@ pub fn process_packet<'a, Pkt: PacketMetadata>(
     if args.full_parse {
         process_full_packet(
             _pkt_count,
-            link_type,
+            dlt,
             pkt,
             local_stats,
             stats,
@@ -32,7 +32,7 @@ pub fn process_packet<'a, Pkt: PacketMetadata>(
             args,
         );
     } else {
-        process_iterate_headers(_pkt_count, link_type, pkt, local_stats, stats, args);
+        process_iterate_headers(_pkt_count, dlt, pkt, local_stats, stats, args);
     }
 }
 
@@ -133,7 +133,7 @@ fn process_iterate_headers_dump<'a, Pkt: PacketMetadata>(
 #[inline(always)]
 pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
     _pkt_count: u64,
-    link_type: &mut Option<LinkType>,
+    dlt: Option<u32>,
     pkt: &'a Pkt,
     local_stats: &mut LocalStats,
     stats: &Stats,
@@ -142,14 +142,7 @@ pub fn process_iterate_headers<'a, Pkt: PacketMetadata>(
     local_stats.total_packets += 1;
     local_stats.total_bytes += pkt.caplen() as u64;
 
-    let lt = match *link_type {
-        Some(lt) => lt,
-        None => {
-            let guessed = PacketIter::guess_link_type(pkt.data());
-            *link_type = Some(guessed);
-            guessed
-        }
-    };
+    let lt = LinkType::from_dlt_or_guess(dlt, pkt.data());
 
     let iter = PacketIter::new(pkt.data(), lt);
 
@@ -250,7 +243,7 @@ fn record_full_packet_stats(packet: &Packet<'_>, local_stats: &mut LocalStats) {
 #[inline(always)]
 pub fn process_full_packet<'a, Meta: PacketMetadata>(
     _pkt_count: u64,
-    link_type: &mut Option<LinkType>,
+    dlt: Option<u32>,
     meta: &'a Meta,
     local_stats: &mut LocalStats,
     stats: &Stats,
@@ -260,14 +253,7 @@ pub fn process_full_packet<'a, Meta: PacketMetadata>(
     local_stats.total_packets += 1;
     local_stats.total_bytes += meta.caplen() as u64;
 
-    let lt = match *link_type {
-        Some(lt) => lt,
-        None => {
-            let guessed = PacketIter::guess_link_type(meta.data());
-            *link_type = Some(guessed);
-            guessed
-        }
-    };
+    let lt = LinkType::from_dlt_or_guess(dlt, meta.data());
 
     if !args.flow_tracker && !args.dump_packet {
         match Packet::from_bytes(meta.data(), lt, ParseMode::Innermost) {

@@ -108,7 +108,6 @@ fn process_pcap(
     let mut bytes_count = 0;
 
     let start = std::time::Instant::now();
-    let link_type = &mut None;
 
     const PCAP_BUFFER_SIZE: usize = 4 * 1024 * 1024;
 
@@ -116,6 +115,7 @@ fn process_pcap(
     match PcapNGReader::new(PCAP_BUFFER_SIZE, file) {
         Ok(mut reader) => {
             info!("Detected PCAPNG format");
+            let mut ng_interfaces: Vec<u32> = Vec::new();
             loop {
                 match reader.next() {
                     Ok((offset, block)) => {
@@ -123,9 +123,10 @@ fn process_pcap(
                             PcapBlockOwned::NG(Block::EnhancedPacket(epb)) => {
                                 packet_count += 1;
                                 bytes_count += epb.caplen as u64;
+                                let dlt = ng_interfaces.get(epb.if_id as usize).copied();
                                 process::process_packet(
                                     packet_count,
-                                    link_type,
+                                    dlt,
                                     &epb,
                                     &mut local_stats,
                                     stats,
@@ -136,9 +137,10 @@ fn process_pcap(
                             PcapBlockOwned::NG(Block::SimplePacket(spb)) => {
                                 packet_count += 1;
                                 bytes_count += spb.origlen as u64;
+                                let dlt = ng_interfaces.first().copied();
                                 process::process_packet(
                                     packet_count,
-                                    link_type,
+                                    dlt,
                                     &spb,
                                     &mut local_stats,
                                     stats,
@@ -148,9 +150,11 @@ fn process_pcap(
                             }
                             PcapBlockOwned::NG(Block::SectionHeader(_shb)) => {
                                 info!("PCAPNG Section Header found");
+                                ng_interfaces.clear();
                             }
-                            PcapBlockOwned::NG(Block::InterfaceDescription(_idb)) => {
-                                info!("PCAPNG Interface Description found");
+                            PcapBlockOwned::NG(Block::InterfaceDescription(idb)) => {
+                                info!("PCAPNG Interface Description found (linktype={})", idb.linktype.0);
+                                ng_interfaces.push(idb.linktype.0 as u32);
                             }
                             _ => {
                                 // Other block types (interface statistics, etc.)
@@ -174,6 +178,7 @@ fn process_pcap(
             // Try legacy PCAP format
             let mut reader = LegacyPcapReader::new(PCAP_BUFFER_SIZE, file)
                 .map_err(|e| format!("Failed to create PCAP reader: {:?}", e))?;
+            let mut legacy_dlt: Option<u32> = None;
 
             loop {
                 match reader.next() {
@@ -184,7 +189,7 @@ fn process_pcap(
                                 bytes_count += packet.caplen as u64;
                                 process::process_packet(
                                     packet_count,
-                                    link_type,
+                                    legacy_dlt,
                                     &packet,
                                     &mut local_stats,
                                     stats,
@@ -192,8 +197,9 @@ fn process_pcap(
                                     args,
                                 );
                             }
-                            PcapBlockOwned::LegacyHeader(_header) => {
-                                info!("Legacy PCAP header found");
+                            PcapBlockOwned::LegacyHeader(header) => {
+                                info!("Legacy PCAP header found (network={})", header.network.0);
+                                legacy_dlt = Some(header.network.0 as u32);
                             }
                             _ => {}
                         }

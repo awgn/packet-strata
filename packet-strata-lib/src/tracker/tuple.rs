@@ -57,7 +57,6 @@ use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-use crate::packet::detect::find_ipv6_upper_protocol;
 use crate::packet::ether::EthAddr;
 use crate::packet::header::{NetworkTunnelLayer, SourceDestLayer, TransportLayer};
 use crate::packet::ipv4::Ipv4Header;
@@ -446,7 +445,7 @@ impl TupleV6 {
 
         let src_ip = ipv6.header.src_ip();
         let dst_ip = ipv6.header.dst_ip();
-        let protocol = ipv6.header.next_header();
+        let protocol = ipv6.upper_protocol();
         let (src_port, dst_port) = extract_ports(pkt);
         let vni = extract_vni(pkt, vni_mapper)?;
 
@@ -472,7 +471,7 @@ impl TupleV6 {
         if l4_bytes.len() < 4 {
             return None;
         }
-        let protocol = find_ipv6_upper_protocol(&ipv6);
+        let protocol = ipv6.upper_protocol();
         match protocol {
             IpProto::TCP | IpProto::UDP | IpProto::SCTP => {
                 let src_port = u16::from_be_bytes([l4_bytes[0], l4_bytes[1]]);
@@ -716,5 +715,128 @@ impl Tuple for TupleEth {
     #[inline(always)]
     fn is_same_dir(&self, pkt: &Packet<'_>) -> bool {
         SourceDestLayer::<EthAddr>::source(pkt.link()).is_some_and(|src| src == self.src)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::packet::iter::LinkType;
+    use crate::packet::ParseMode;
+    use std::collections::hash_map::DefaultHasher;
+
+    fn build_eth_ipv6(
+        src: [u8; 16],
+        dst: [u8; 16],
+        next_header: u8,
+        ext_and_l4: &[u8],
+    ) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(14 + 40 + ext_and_l4.len());
+        buf.extend_from_slice(&[0x33, 0x33, 0x00, 0x00, 0x00, 0x16]); // dst MAC
+        buf.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]); // src MAC
+        buf.extend_from_slice(&0x86DDu16.to_be_bytes());
+        buf.extend_from_slice(&[0x60, 0x00, 0x00, 0x00]); // version 6
+        buf.extend_from_slice(&(ext_and_l4.len() as u16).to_be_bytes());
+        buf.push(next_header);
+        buf.push(1); // hop limit
+        buf.extend_from_slice(&src);
+        buf.extend_from_slice(&dst);
+        buf.extend_from_slice(ext_and_l4);
+        buf
+    }
+
+    #[test]
+    fn test_tuple_v6_hop_by_hop_icmpv6_mldv2() {
+        let src = [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let dst = [0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x16];
+        // Hop-by-Hop (8B, Next=ICMPv6 58) + MLDv2 ICMPv6 header (8B)
+        let body = [
+            58, 0, 0x05, 0x02, 0x00, 0x00, 0x01, 0x00, // Hop-by-Hop Router Alert
+            143, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ICMPv6 MLDv2 Report
+        ];
+        // Add trailing Ethernet padding (should be clamped by clamp_to_ip_length)
+        let mut raw = build_eth_ipv6(src, dst, 0, &body);
+        raw.extend_from_slice(&[0xaa, 0xbb, 0xcc, 0xdd]);
+
+        let pkt = Packet::from_bytes(&raw, LinkType::Ethernet, ParseMode::Innermost).unwrap();
+        let mut vni = VniMapper::new();
+        let tuple = TupleV6::new(&pkt, &mut vni).unwrap();
+        assert_eq!(tuple.protocol, IpProto::IPV6_ICMP);
+        assert_eq!(pkt.data().len(), 0); // 16B payload_len - 8B ext - 8B ICMPv6 = 0B (padding stripped)
+    }
+
+    #[test]
+    fn test_tuple_v6_asymmetric_extensions_tcp_symmetric_key() {
+        let a = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let b = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+
+        // Forward: Hop-by-Hop (16B) + Fragment (8B, non-zero reserved byte) + TCP (20B)
+        let mut fwd_body = Vec::new();
+        // Hop-by-Hop: Next=Fragment(44), hdr_ext_len=1 (16B total)
+        fwd_body.extend_from_slice(&[44, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        // Fragment: Next=TCP(6), Reserved=0x7f (verify 8B fixed length ignores byte 1)
+        fwd_body.extend_from_slice(&[6, 0x7f, 0, 0, 0, 0, 0, 1]);
+        // TCP 50000 -> 443
+        fwd_body.extend_from_slice(&50000u16.to_be_bytes());
+        fwd_body.extend_from_slice(&443u16.to_be_bytes());
+        fwd_body.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 0, 0x50, 0x02, 0x20, 0x00, 0, 0, 0, 0]);
+        let fwd_raw = build_eth_ipv6(a, b, 0, &fwd_body);
+
+        // Reverse: plain IPv6 + TCP 443 -> 50000 (no extensions)
+        let mut rev_body = Vec::new();
+        rev_body.extend_from_slice(&443u16.to_be_bytes());
+        rev_body.extend_from_slice(&50000u16.to_be_bytes());
+        rev_body.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 2, 0x50, 0x12, 0x20, 0x00, 0, 0, 0, 0]);
+        let rev_raw = build_eth_ipv6(b, a, 6, &rev_body);
+
+        let fwd_pkt = Packet::from_bytes(&fwd_raw, LinkType::Ethernet, ParseMode::Innermost).unwrap();
+        let rev_pkt = Packet::from_bytes(&rev_raw, LinkType::Ethernet, ParseMode::Innermost).unwrap();
+
+        let mut vni = VniMapper::new();
+        let t_fwd = TupleV6::new(&fwd_pkt, &mut vni).unwrap();
+        let t_rev = TupleV6::new(&rev_pkt, &mut vni).unwrap();
+
+        assert_eq!(t_fwd.protocol, IpProto::TCP);
+        assert_eq!(t_rev.protocol, IpProto::TCP);
+        assert_eq!(Symmetric(t_fwd), Symmetric(t_rev));
+
+        let mut h1 = DefaultHasher::new();
+        let mut h2 = DefaultHasher::new();
+        Symmetric(t_fwd).hash(&mut h1);
+        Symmetric(t_rev).hash(&mut h2);
+        assert_eq!(h1.finish(), h2.finish());
+    }
+
+    #[test]
+    fn test_tuple_v6_ah_extension_udp() {
+        let a = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let b = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+
+        // AH (payload_len=1 -> (1+2)*4 = 12B, Next=UDP 17) + UDP (8B)
+        let body = [
+            17, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, // AH (12B)
+            0x13, 0x88, 0x00, 0x35, 0x00, 0x08, 0x00, 0x00, // UDP 5000 -> 53
+        ];
+        let raw = build_eth_ipv6(a, b, 51, &body);
+
+        let pkt = Packet::from_bytes(&raw, LinkType::Ethernet, ParseMode::Innermost).unwrap();
+        let mut vni = VniMapper::new();
+        let tuple = TupleV6::new(&pkt, &mut vni).unwrap();
+        assert_eq!(tuple.protocol, IpProto::UDP);
+        assert_eq!(tuple.src_port, 5000);
+        assert_eq!(tuple.dst_port, 53);
+    }
+
+    #[test]
+    fn test_tuple_v6_truncated_extension_does_not_panic() {
+        let a = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let b = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+        // Truncated Hop-by-Hop claiming 24 bytes (hdr_ext_len = 2) with only 4 bytes present
+        let raw = build_eth_ipv6(a, b, 0, &[58, 2, 0, 0]);
+        let pkt = Packet::from_bytes(&raw, LinkType::Ethernet, ParseMode::Innermost).unwrap();
+        let mut vni = VniMapper::new();
+        let tuple = TupleV6::new(&pkt, &mut vni).unwrap();
+        // Falls back safely without panicking
+        assert_eq!(tuple.protocol, IpProto::IPV6_HOPOPT);
     }
 }

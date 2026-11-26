@@ -107,10 +107,12 @@
 //! When an unsupported protocol is encountered, the iterator returns `Header::Unknown`
 //! with the protocol identifier and remaining buffer, then terminates.
 
+use std::fmt;
+
 use super::arp::ArpHeader;
 use super::detect::{
-    detect_gre_variant, detect_mpls_inner_protocol, detect_udp_tunnel, find_ipv6_upper_protocol,
-    is_stt_port, NextLayer, TunnelType,
+    detect_gre_variant, detect_mpls_inner_protocol, detect_udp_tunnel, is_stt_port, NextLayer,
+    TunnelType,
 };
 use super::ether::EtherHeader;
 // Re-export Header and UnknownProto for API compatibility
@@ -159,6 +161,75 @@ pub enum LinkType {
     RawIpv4,
     /// Raw IPv6 (no link layer header)
     RawIpv6,
+}
+
+impl LinkType {
+    /// Returns the canonical lowercase kebab-case name of this link layer type.
+    #[inline]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ethernet => "ethernet",
+            Self::Sll => "sll",
+            Self::Sllv2 => "sllv2",
+            Self::Null => "null",
+            Self::RawIpv4 => "raw-ipv4",
+            Self::RawIpv6 => "raw-ipv6",
+        }
+    }
+
+    /// Maps a libpcap/PCAPNG Data Link Type (`DLT_*` / `LINKTYPE_*`) code to a [`LinkType`].
+    ///
+    /// Returns `None` for unsupported link-layer types. Note that `DLT_RAW` (`12` on live
+    /// BSD/Linux handles, `101` in PCAP/PCAPNG files) maps to [`LinkType::RawIpv4`], which
+    /// automatically dispatches IPv4 vs IPv6 by inspecting the first nibble during packet
+    /// parsing; callers that inspect `LinkType` directly should prefer
+    /// [`LinkType::from_dlt_with_payload`].
+    #[inline]
+    pub const fn from_dlt(dlt: u32) -> Option<Self> {
+        match dlt {
+            0 | 108 => Some(Self::Null),     // DLT_NULL / DLT_LOOP
+            1 => Some(Self::Ethernet),       // DLT_EN10MB
+            12 | 101 => Some(Self::RawIpv4), // DLT_RAW (live BSD/Linux = 12, LINKTYPE_RAW = 101)
+            113 => Some(Self::Sll),          // DLT_LINUX_SLL
+            228 => Some(Self::RawIpv4),      // DLT_IPV4
+            229 => Some(Self::RawIpv6),      // DLT_IPV6
+            276 => Some(Self::Sllv2),        // DLT_LINUX_SLL2
+            _ => None,
+        }
+    }
+
+    /// Maps a libpcap/PCAPNG DLT code to a [`LinkType`], inspecting `payload`'s first nibble
+    /// for `DLT_RAW` (`12` / `101`) so IPv6 raw packets return [`LinkType::RawIpv6`].
+    #[inline]
+    pub fn from_dlt_with_payload(dlt: u32, payload: &[u8]) -> Option<Self> {
+        match dlt {
+            0 | 108 => Some(Self::Null),
+            1 => Some(Self::Ethernet),
+            12 | 101 => match payload.first().map(|b| b >> 4) {
+                Some(6) => Some(Self::RawIpv6),
+                _ => Some(Self::RawIpv4),
+            },
+            113 => Some(Self::Sll),
+            228 => Some(Self::RawIpv4),
+            229 => Some(Self::RawIpv6),
+            276 => Some(Self::Sllv2),
+            _ => None,
+        }
+    }
+
+    /// Resolves a [`LinkType`] from an optional capture DLT, falling back to
+    /// [`PacketIter::guess_link_type`] only when `dlt` is `None` or unmapped.
+    #[inline]
+    pub fn from_dlt_or_guess(dlt: Option<u32>, payload: &[u8]) -> Self {
+        dlt.and_then(|d| Self::from_dlt_with_payload(d, payload))
+            .unwrap_or_else(|| PacketIter::guess_link_type(payload))
+    }
+}
+
+impl fmt::Display for LinkType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Iterator over packet headers
@@ -478,11 +549,7 @@ impl<'a> PacketIter<'a> {
                 Ok((ipv6, rest)) => {
                     // For IPv6, find the upper layer protocol
                     // Fast path: no extension headers
-                    let next_proto = if ipv6.raw_extensions.is_empty() {
-                        ipv6.next_header()
-                    } else {
-                        find_ipv6_upper_protocol(&ipv6)
-                    };
+                    let next_proto = ipv6.upper_protocol();
                     self.remaining = rest;
                     // Common case first: transport protocol
                     if next_proto != IpProto::IP_ENCAP && next_proto != IpProto::IPV6 {
@@ -2670,5 +2737,65 @@ mod tests {
 
         // Done
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_link_type_from_dlt_and_display() {
+        assert_eq!(LinkType::from_dlt(0), Some(LinkType::Null));
+        assert_eq!(LinkType::from_dlt(108), Some(LinkType::Null));
+        assert_eq!(LinkType::from_dlt(1), Some(LinkType::Ethernet));
+        assert_eq!(LinkType::from_dlt(12), Some(LinkType::RawIpv4));
+        assert_eq!(LinkType::from_dlt(101), Some(LinkType::RawIpv4));
+        assert_eq!(LinkType::from_dlt(113), Some(LinkType::Sll));
+        assert_eq!(LinkType::from_dlt(228), Some(LinkType::RawIpv4));
+        assert_eq!(LinkType::from_dlt(229), Some(LinkType::RawIpv6));
+        assert_eq!(LinkType::from_dlt(276), Some(LinkType::Sllv2));
+        assert_eq!(LinkType::from_dlt(9), None); // DLT_PPP (unmapped)
+        assert_eq!(LinkType::from_dlt(9999), None);
+
+        // Payload-aware DLT_RAW disambiguation
+        assert_eq!(
+            LinkType::from_dlt_with_payload(101, &[0x45, 0x00]),
+            Some(LinkType::RawIpv4)
+        );
+        assert_eq!(
+            LinkType::from_dlt_with_payload(101, &[0x60, 0x00]),
+            Some(LinkType::RawIpv6)
+        );
+        assert_eq!(
+            LinkType::from_dlt_with_payload(12, &[0x60, 0x00]),
+            Some(LinkType::RawIpv6)
+        );
+        assert_eq!(
+            LinkType::from_dlt_with_payload(101, &[]),
+            Some(LinkType::RawIpv4)
+        );
+
+        // DLT_RAW with bytes 12..14 resembling EtherType 0x0800 must NOT fall back to Ethernet
+        let mut raw_ipv4_looks_like_eth = vec![0x45u8; 20];
+        raw_ipv4_looks_like_eth[12] = 0x08;
+        raw_ipv4_looks_like_eth[13] = 0x00;
+        raw_ipv4_looks_like_eth[14] = 0x45;
+        assert_eq!(
+            LinkType::from_dlt_or_guess(Some(101), &raw_ipv4_looks_like_eth),
+            LinkType::RawIpv4
+        );
+        // Missing/unmapped DLT falls back to guess_link_type
+        assert_eq!(
+            LinkType::from_dlt_or_guess(None, &[0x60, 0x00, 0x00, 0x00]),
+            LinkType::RawIpv6
+        );
+        assert_eq!(
+            LinkType::from_dlt_or_guess(Some(9999), &[0x45, 0x00, 0x00, 0x14]),
+            LinkType::RawIpv4
+        );
+
+        // Lowercase kebab-case Display & as_str
+        assert_eq!(format!("{}", LinkType::Ethernet), "ethernet");
+        assert_eq!(format!("{}", LinkType::Sll), "sll");
+        assert_eq!(format!("{}", LinkType::Sllv2), "sllv2");
+        assert_eq!(format!("{}", LinkType::Null), "null");
+        assert_eq!(format!("{}", LinkType::RawIpv4), "raw-ipv4");
+        assert_eq!(format!("{}", LinkType::RawIpv6), "raw-ipv6");
     }
 }

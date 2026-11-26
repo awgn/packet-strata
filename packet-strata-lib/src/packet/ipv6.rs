@@ -144,6 +144,7 @@ pub const IPV6_NEXT_ICMPV6: IpProto = IpProto::IPV6_ICMP;
 pub const IPV6_NEXT_NONE: IpProto = IpProto::IPV6_NONXT;
 pub const IPV6_NEXT_DSTOPTS: IpProto = IpProto::IPV6_OPTS;
 pub const IPV6_NEXT_MOBILITY: IpProto = IpProto::IPV6_MOBILITY;
+pub const IPV6_NEXT_AH: IpProto = IpProto::AH;
 
 impl Ipv6Header {
     /// Returns the IP version (should always be 6)
@@ -237,7 +238,12 @@ impl Ipv6Header {
     pub fn has_extension_headers(&self) -> bool {
         matches!(
             self.next_header,
-            IPV6_NEXT_HOPBYHOP | IPV6_NEXT_ROUTING | IPV6_NEXT_FRAGMENT | IPV6_NEXT_DSTOPTS
+            IPV6_NEXT_HOPBYHOP
+                | IPV6_NEXT_ROUTING
+                | IPV6_NEXT_FRAGMENT
+                | IPV6_NEXT_DSTOPTS
+                | IPV6_NEXT_MOBILITY
+                | IPV6_NEXT_AH
         )
     }
 
@@ -263,6 +269,7 @@ impl Ipv6Header {
         let mut len = Self::FIXED_LEN;
         let mut next_hdr = initial_next_header;
         let mut is_fragmented = false;
+        let mut hops = 0u8;
 
         // Parse extension headers
         while matches!(
@@ -272,19 +279,37 @@ impl Ipv6Header {
                 | IPV6_NEXT_DSTOPTS
                 | IPV6_NEXT_MOBILITY
                 | IPV6_NEXT_FRAGMENT
+                | IPV6_NEXT_AH
         ) {
+            if hops >= 32 {
+                return None;
+            }
+            hops += 1;
+
             if next_hdr == IPV6_NEXT_FRAGMENT {
                 if !allow_fragment {
                     return None;
                 }
                 is_fragmented = true;
                 // Fragment header is 8 bytes fixed
-                // Get next header field
-                if len >= bytes_available {
+                if len + 8 > bytes_available {
                     return None;
                 }
                 next_hdr = IpProto::from(buf[len]);
                 len += 8;
+            } else if next_hdr == IPV6_NEXT_AH {
+                // Authentication Header (RFC 4302):
+                // - Byte 0: Next Header
+                // - Byte 1: Payload Len (in 4-byte units, minus 2; min valid total = 12 bytes)
+                if len + 12 > bytes_available {
+                    return None;
+                }
+                next_hdr = IpProto::from(buf[len]);
+                let delta = (buf[len + 1] as usize + 2) * 4;
+                if delta < 12 || len + delta > bytes_available {
+                    return None;
+                }
+                len += delta;
             } else {
                 // Other extension headers
                 // Need at least 2 more bytes to read next header and length
@@ -368,6 +393,19 @@ impl<'a> Ipv6HeaderExt<'a> {
     /// Get the total header length including extensions
     pub fn ext_headers_len(&self) -> usize {
         Ipv6Header::FIXED_LEN + self.raw_extensions.len()
+    }
+
+    /// Returns the upper-layer protocol after skipping any IPv6 extension headers.
+    ///
+    /// On the common path with no extension headers (`raw_extensions.is_empty()`),
+    /// this directly returns `self.header.next_header()` with zero extra work.
+    #[inline]
+    pub fn upper_protocol(&self) -> IpProto {
+        if self.raw_extensions.is_empty() {
+            self.header.next_header()
+        } else {
+            crate::packet::detect::find_ipv6_upper_protocol(self)
+        }
     }
 }
 

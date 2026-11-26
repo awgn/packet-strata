@@ -7,8 +7,8 @@ use zerocopy::{FromBytes, Immutable, KnownLayout, Ref, Unaligned};
 use crate::packet::{
     arp::{ArpHeader, ArpHeaderFull},
     detect::{
-        detect_gre_variant, detect_mpls_inner_protocol, detect_udp_tunnel,
-        find_ipv6_upper_protocol, is_stt_port, NextLayer, TunnelType,
+        detect_gre_variant, detect_mpls_inner_protocol, detect_udp_tunnel, is_stt_port, NextLayer,
+        TunnelType,
     },
     ether::{EtherHeader, EtherHeaderVlan},
     header::{LinkLayer, NetworkLayer, NetworkTunnelLayer, TransportLayer, TunnelLayer},
@@ -271,7 +271,7 @@ impl<'a> Packet<'a> {
                 if payload_len == 0 {
                     return rest;
                 }
-                payload_len
+                payload_len.saturating_sub(ipv6.raw_extensions.len())
             }
             _ => return rest,
         };
@@ -421,11 +421,7 @@ impl<'a> Packet<'a> {
         match ether_proto {
             EtherProto::IPV6 => {
                 let (ipv6, rest) = Ipv6Header::from_bytes(remaining)?;
-                let next_proto = if ipv6.raw_extensions.is_empty() {
-                    ipv6.next_header()
-                } else {
-                    find_ipv6_upper_protocol(&ipv6)
-                };
+                let next_proto = ipv6.upper_protocol();
                 if next_proto != IpProto::IP_ENCAP && next_proto != IpProto::IPV6 {
                     return Self::parse_transport_fast(
                         link,
@@ -729,11 +725,7 @@ impl<'a> Packet<'a> {
             }
             EtherProto::IPV6 => {
                 let (ipv6, rest) = Ipv6Header::from_bytes(buf)?;
-                let next_proto = if ipv6.raw_extensions.is_empty() {
-                    ipv6.next_header()
-                } else {
-                    find_ipv6_upper_protocol(&ipv6)
-                };
+                let next_proto = ipv6.upper_protocol();
 
                 if next_proto == IpProto::IP_ENCAP {
                     // IPv4-in-IPv6 (IP4in6) tunnel

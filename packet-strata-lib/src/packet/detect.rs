@@ -198,20 +198,20 @@ pub(crate) fn find_ipv6_upper_protocol(ipv6: &Ipv6HeaderExt<'_>) -> IpProto {
 
     // Walk through extension headers to find the last next_header value
     let mut remaining = ipv6.raw_extensions;
-    let mut next_header = ipv6.next_header();
+    let mut current_header = ipv6.next_header();
 
-    while !remaining.is_empty() {
-        // Extension headers have next_header at offset 0 and length at offset 1
-        // Length is in 8-byte units, not including the first 8 bytes
+    for _ in 0..32 {
         if remaining.len() < 2 {
             break;
         }
 
-        next_header = IpProto(remaining[0]);
-        let ext_len = match next_header {
-            // Fragment header is fixed 8 bytes (no length field used)
+        let next_header = IpProto(remaining[0]);
+        let ext_len = match current_header {
+            // Fragment header is fixed 8 bytes (byte 1 is reserved)
             IpProto::IPV6_FRAG => 8,
-            // Other extension headers: (hdr_ext_len + 1) * 8
+            // Authentication Header (RFC 4302): length in 4-byte units, minus 2
+            IpProto::AH => ((remaining[1] as usize) + 2) * 4,
+            // Standard extension headers (RFC 8200): (hdr_ext_len + 1) * 8
             _ => ((remaining[1] as usize) + 1) * 8,
         };
 
@@ -219,10 +219,14 @@ pub(crate) fn find_ipv6_upper_protocol(ipv6: &Ipv6HeaderExt<'_>) -> IpProto {
             break;
         }
 
+        current_header = next_header;
         remaining = &remaining[ext_len..];
+        if remaining.is_empty() {
+            break;
+        }
     }
 
-    next_header
+    current_header
 }
 
 /// Check if a TCP port indicates an STT tunnel
